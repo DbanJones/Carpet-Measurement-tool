@@ -4,6 +4,7 @@
  */
 import type { Mm, Id, CutPiece, RollPlan, Warning, Seam, BroadloomProduct, BroadloomPlanningOptions, Polygon, Doorway } from './types';
 import { planRoom, seamPenaltyMm2, type RoomPlan } from './broadloom';
+import { VINYL_ALLOWS_CROSS_JOINS } from './defaults';
 import { packOnRoll, splitIntoRolls } from './packer';
 import { polygonAreaMm2 } from './geometry';
 import { mm2ToM2 } from './units';
@@ -310,7 +311,7 @@ export function applyCrossJoins(
   // Sheet vinyl is never cross-joined. A butt join across a kitchen or bathroom floor is a route for
   // water under the sheet and cannot be welded flat the way a side seam can, so no amount of saved
   // material buys one.
-  if (product?.kind === 'sheet_vinyl') return current;
+  if (product?.kind === 'sheet_vinyl' && !VINYL_ALLOWS_CROSS_JOINS) return current;
   const candidates = current
     .filter((p) => p.role === 'fill' && p.width <= rollWidth / 2)
     .sort((a, b) => b.length - a.length);

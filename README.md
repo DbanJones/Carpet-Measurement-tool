@@ -19,10 +19,12 @@ What it works out:
   overlay and fixings, moisture testing and DPMs, door easing, driven by subfloor type and condition.
 - **Laminate, engineered wood, LVT (click and glue-down), carpet tiles** – packs with pattern-based
   wastage, underlay and DPM, beading/scotia, thresholds, adhesive, tackifier.
-- **Pricing** – editable price book (materials and labour), VAT, per-line and total costs, CSV export,
-  print-ready estimate.
+- **Pricing** – editable price book (materials and labour), a minimum job charge, VAT, per-line and
+  total costs, CSV export, print-ready estimate with the customer, site and date on it.
 
-Everything runs client-side: no server, no account, projects are saved in the browser and as JSON files.
+Everything runs client-side: no server, no account, projects are saved in the browser and as JSON
+files. It installs as a PWA and, once opened online, works offline — which is how it is used: measure
+up in an empty house with no signal.
 
 ## Quick start
 

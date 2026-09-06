@@ -42,10 +42,15 @@ const DOOR_WIDTH_OPTIONS: { value: string; label: string }[] = [
 function useSharedOpeningOptions(room: Room): { value: string; label: string }[] {
   const rooms = useProjectStore((s) => s.project.rooms);
   const options = [{ value: '', label: 'Not shared — its own opening' }];
+  const seen = new Set<string>();
   for (const other of rooms) {
     if (other.id === room.id) continue;
     for (const d of other.doorways) {
-      options.push({ value: d.sharedOpeningId?.trim() || `pair:${other.id}:${d.id}`, label: `${other.name} — ${d.label?.trim() || 'doorway'} (${d.width} mm)` });
+      // two doorways already linked to one another share a value: offer the opening once
+      const value = d.sharedOpeningId?.trim() || `pair:${other.id}:${d.id}`;
+      if (seen.has(value)) continue;
+      seen.add(value);
+      options.push({ value, label: `${other.name} — ${d.label?.trim() || 'doorway'} (${d.width} mm)` });
     }
   }
   return options;

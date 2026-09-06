@@ -106,6 +106,26 @@ describe('RoomEditor', () => {
     expect(getRoom(id).shape).toEqual({ kind: 'rectangle', length: 4000, width: 3000 });
   });
 
+  it('moves the doorways onto the new outline when the shape type changes', () => {
+    const id = addLounge();
+    render(<RoomEditor roomId={id} />);
+    // put the doorway on a wall that a rectangle will not have
+    fireEvent.change(screen.getByLabelText('Shape type'), { target: { value: 'rectangle_with_features' } });
+    fireEvent.click(screen.getByRole('button', { name: '+ Bay window' }));
+    fireEvent.click(screen.getByRole('button', { name: '+ Chimney breast' }));
+    const walls = (screen.getByLabelText('Wall or edge') as HTMLSelectElement).options.length;
+    expect(walls).toBeGreaterThan(4);
+    fireEvent.change(screen.getByLabelText('Wall or edge'), { target: { value: String(walls - 1) } });
+    expect(getRoom(id).doorways[0]!.edgeIndex).toBe(walls - 1);
+
+    // back to a 4-wall rectangle: the doorway follows rather than being orphaned on a wall that is gone
+    fireEvent.change(screen.getByLabelText('Shape type'), { target: { value: 'rectangle' } });
+    const d = getRoom(id).doorways[0]!;
+    expect(d.edgeIndex).toBeLessThan(4);
+    expect(d.edgeIndex).toBeGreaterThanOrEqual(0);
+    expect(screen.queryByText(/no longer exists/)).toBeNull();
+  });
+
   it('walking the walls writes a polygon once three walls are entered', () => {
     const id = addLounge();
     render(<RoomEditor roomId={id} />);

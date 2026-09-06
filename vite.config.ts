@@ -23,6 +23,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.{ts,tsx}'],
-    environmentMatchGlobs: [['src/ui/**', 'jsdom']],
+    environmentMatchGlobs: [
+      ['src/ui/**', 'jsdom'],
+      ['src/store/**', 'jsdom'],
+    ],
   },
 });
