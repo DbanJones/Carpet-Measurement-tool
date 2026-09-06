@@ -495,6 +495,7 @@ const FLOOR_PREP_SPECS: Record<string, FieldSpec> = {
   latexWastage: { kind: 'number', spec: { min: 0, max: 5 } },
   primerCoverageM2PerLitre: { kind: 'number', spec: POSITIVE },
   primerCoats: { kind: 'number', spec: NON_NEGATIVE_INT },
+  primerCanLitres: { kind: 'number', spec: POSITIVE },
   plySheetLength: { kind: 'number', spec: POSITIVE },
   plySheetWidth: { kind: 'number', spec: POSITIVE },
   plyWastage: { kind: 'number', spec: { min: 0, max: 5 } },

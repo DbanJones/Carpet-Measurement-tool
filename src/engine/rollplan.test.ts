@@ -272,13 +272,73 @@ describe('pile direction is chosen for the roll, not the room', () => {
     expect(plan.cuts).toHaveLength(1);
   });
 
-  it('warns when rooms joined by a continuous opening end up running different ways', () => {
+  it('warns when rooms joined to each other by a continuous opening end up running different ways', () => {
     const hall = room('hall', { kind: 'rectangle', length: 4000, width: 1000 }, { pileDirection: 'along_length' });
-    hall.doorways = [{ id: 'd1', edgeIndex: 0, offset: 800, width: 860, transition: 'carpet', continuous: true }];
+    hall.doorways = [{ id: 'd1', edgeIndex: 0, offset: 800, width: 860, transition: 'carpet', continuous: true, sharedOpeningId: 'hall-landing' }];
     const landing = room('landing', { kind: 'rectangle', length: 3000, width: 2000 }, { pileDirection: 'along_width' });
-    landing.doorways = [{ id: 'd2', edgeIndex: 0, offset: 500, width: 860, transition: 'carpet', continuous: true }];
+    landing.doorways = [{ id: 'd2', edgeIndex: 0, offset: 500, width: 860, transition: 'carpet', continuous: true, sharedOpeningId: 'hall-landing' }];
     const plan = buildRollPlan({ product: carpet4, rooms: [hall, landing], options: opts });
     expect(plan.warnings.map((w) => w.code)).toContain('PILE_DIRECTION_SPLIT');
+  });
+
+  it('does NOT warn when two rooms each run continuously into somewhere else: they are not joined to one another', () => {
+    // Bedroom 1 opens into the dressing room, bedroom 2 into the box room. The carpet never crosses
+    // between them, so "these are joined by an opening" would be false and pinning them to the same
+    // direction would waste carpet for nothing.
+    const bed1 = room('bed1', { kind: 'rectangle', length: 4000, width: 1000 }, { pileDirection: 'along_length' });
+    bed1.doorways = [{ id: 'd1', edgeIndex: 0, offset: 800, width: 860, transition: 'carpet', continuous: true, sharedOpeningId: 'bed1-dressing' }];
+    const bed2 = room('bed2', { kind: 'rectangle', length: 3000, width: 2000 }, { pileDirection: 'along_width' });
+    bed2.doorways = [{ id: 'd2', edgeIndex: 0, offset: 500, width: 860, transition: 'carpet', continuous: true, sharedOpeningId: 'bed2-box' }];
+    const plan = buildRollPlan({ product: carpet4, rooms: [bed1, bed2], options: opts });
+    expect(plan.warnings.map((w) => w.code)).not.toContain('PILE_DIRECTION_SPLIT');
+  });
+});
+
+describe('what the roll plan bought, said out loud', () => {
+  const balanced4: BroadloomPlanningOptions = { ...opts, seamPolicy: 'balanced', maxCrossJoinsPerFill: 2, minCrossJoinStripLength: 600, minFillWidth: 300 };
+
+  it('discloses a cross-joined fill: a butt joint across the room is not a side seam', () => {
+    // 4.5 x 4.2 m lounge on a 4 m roll: the 0.6 m fill is cut as three 1.48 m pieces butt-joined end
+    // to end. It saves real money, but nothing else on the quote says the fill is in three pieces.
+    const plan = buildRollPlan({ product: carpet4, rooms: [room('lounge', { kind: 'rectangle', length: 4500, width: 4200 }, balanced4)], options: balanced4 });
+    expect(plan.pieces.filter((p) => p.crossJoinGroup !== undefined)).toHaveLength(3);
+    const note = plan.warnings.find((w) => w.code === 'CROSS_JOIN')!;
+    expect(note.level).toBe('info');
+    expect(note.subjectId).toBe('lounge');
+    expect(note.message).toContain('0.60 m fill');
+    expect(note.message).toContain('2 cross joins');
+    expect(note.message).toMatch(/saving \d+\.\d\d m²/);
+  });
+
+  it('says nothing about cross joins when the fill is left whole', () => {
+    const plan = buildRollPlan({ product: carpet4, rooms: [room('bed', { kind: 'rectangle', length: 4200, width: 3500 }, balanced4)], options: balanced4 });
+    expect(plan.warnings.map((w) => w.code)).not.toContain('CROSS_JOIN');
+  });
+
+  it('discloses a seam a room only takes to suit the rest of the roll', () => {
+    // Bedroom 1 (4.2 x 3.5) planned alone is one 4.3 x 3.6 m piece with no seam. Packed beside
+    // bedroom 2 it is turned and gains a seam, which shortens the whole roll — the right trade to
+    // offer, but the estimator has to be able to see it was made.
+    const bed1 = room('Bedroom 1', { kind: 'rectangle', length: 4200, width: 3500 }, balanced4);
+    const bed2 = room('Bedroom 2', {
+      kind: 'rectangle_with_features',
+      length: 3600,
+      width: 3000,
+      features: [{ id: 'w', wall: 'right', offset: 300, width: 1800, depth: 600, label: 'Wardrobe recess' }],
+    }, balanced4);
+    const alone = buildRollPlan({ product: carpet4, rooms: [bed1], options: balanced4 });
+    expect(alone.seamsByRoom['Bedroom 1']).toHaveLength(0);
+
+    const together = buildRollPlan({ product: carpet4, rooms: [bed1, bed2], options: balanced4 });
+    expect(together.seamsByRoom['Bedroom 1']).toHaveLength(1);
+    const note = together.warnings.find((w) => w.code === 'ROLL_SEAM_TRADE')!;
+    expect(note.level).toBe('info');
+    expect(note.subjectId).toBe('Bedroom 1');
+    expect(note.message).toContain('1 seam where the room on its own needs 0');
+    expect(note.message).toMatch(/comes to \d+\.\d m \(\d+\.\d\d m²\) less/);
+    // and the trade really did shorten the order
+    const bed2Alone = buildRollPlan({ product: carpet4, rooms: [bed2], options: balanced4 });
+    expect(together.orderLength).toBeLessThan(alone.orderLength + bed2Alone.orderLength);
   });
 });
 
@@ -295,12 +355,20 @@ describe('sheet vinyl', () => {
     expect(plan.pieces.every((p) => p.width >= VINYL_MIN_FILL_WIDTH)).toBe(true);
   });
 
-  it('warns when more than one seam is planned, so the estimator looks at a wider roll', () => {
+  it('warns as soon as ONE seam is planned, so the estimator looks at a wider roll', () => {
     // 9 x 5 m open-plan kitchen/diner: three drops of a 3 m roll, so two seams to weld
     const kitchen = room('kitchen', { kind: 'rectangle', length: 9000, width: 5000 }, balanced);
     const plan = buildRollPlan({ product: vinyl3, rooms: [kitchen], options: balanced });
     expect((plan.seamsByRoom.kitchen ?? []).length).toBeGreaterThan(1);
-    expect(plan.warnings.map((w) => w.code)).toContain('VINYL_MULTIPLE_SEAMS');
+    expect(plan.warnings.map((w) => w.code)).toContain('VINYL_SEAM');
+
+    // A single seam is the one worth avoiding: it is what forces the cold weld and the bonded floor.
+    const kitchenDiner = room('kd', { kind: 'rectangle', length: 4600, width: 3600 }, balanced);
+    const one = buildRollPlan({ product: { ...vinyl3, alternativeRollWidths: [2000, 4000] }, rooms: [kitchenDiner], options: balanced });
+    expect((one.seamsByRoom.kd ?? []).length).toBe(1);
+    const seamWarning = one.warnings.find((w) => w.code === 'VINYL_SEAM')!;
+    expect(seamWarning.message).toContain('1 seam is planned');
+    expect(seamWarning.message).toContain('4.0 m roll'); // the alternative width that would remove it
   });
 });
 

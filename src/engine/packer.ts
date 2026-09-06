@@ -7,7 +7,7 @@
  * cut whose length is the piece's length. This mirrors how a fitter cuts: one cross-cut per shelf,
  * then the pieces are cut side by side out of that length.
  */
-import type { Mm, CutPiece, RollCut, Offcut } from './types';
+import type { Mm, CutPiece, RollCut, Offcut, Warning } from './types';
 import { ceilToStep } from './units';
 import { mm2ToM2 } from './units';
 
@@ -90,6 +90,20 @@ export function packOnRoll(input: PackInput): PackResult {
   });
 
   return { cuts, totalLength, offcuts, rejected };
+}
+
+/**
+ * A warning for a piece the packer refused, with a message that says WHY it was refused: too wide
+ * for the roll, or no usable size at all (a zero / NaN dimension from a broken allowance). `noun`
+ * names the piece for the reader — "piece" for carpet, "underlay piece" for underlay — so the same
+ * diagnosis is used wherever `packOnRoll` rejects something.
+ */
+export function rejectWarning(r: CutPiece, rollWidth: Mm, noun = 'piece'): Warning {
+  const tooWide = r.width > rollWidth + 1e-6;
+  const message = tooWide
+    ? `${r.ownerName}: ${noun} "${r.label}" (${(r.width / 1000).toFixed(2)} m) is wider than the ${(rollWidth / 1000).toFixed(2)} m roll.`
+    : `${r.ownerName}: ${noun} "${r.label}" has no usable size (${r.length} x ${r.width} mm) — check the room's dimensions and allowances.`;
+  return { level: 'error', code: tooWide ? 'PIECE_TOO_WIDE' : 'PIECE_NOT_MEASURABLE', message, subjectId: r.ownerId };
 }
 
 function makeOffcut(width: Mm, length: Mm, fromCutIndex: number, usableMin: Mm): Offcut {

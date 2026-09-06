@@ -44,7 +44,7 @@ import type {
   Subfloor,
   Doorway,
 } from './types';
-import { shapeToPolygon, polygonAreaMm2, polygonPerimeter, fixingPerimeter, boundingBox, distance, isSimplePolygon, doorwayProblem, hasOverlappingDoorways } from './geometry';
+import { shapeToPolygon, polygonAreaMm2, polygonPerimeter, fixingPerimeter, boundingBox, distance, isSimplePolygon, doorwayProblem, hasOverlappingDoorways, overlappingFeatures } from './geometry';
 import { buildRollPlan, type RollPlanInput, type RollPlanRoom } from './rollplan';
 import { planStaircase, type StairPlan } from './stairs';
 import { planHardFloor, planSheetVinylSundries, isFloatingFloor, type HardFloorPlan, type SheetVinylSundries } from './hardfloor';
@@ -67,7 +67,7 @@ import {
   type TapePlan,
   type TapeRoom,
 } from './accessories';
-import { planFloorPrep, type FloorPrepPlan, type PrepRoomInput, type PrepItem, type PrepItemKind } from './floorprep';
+import { planFloorPrep, needsDoorEasing, type FloorPrepPlan, type PrepRoomInput, type PrepItem, type PrepItemKind } from './floorprep';
 import {
   CARPET_ROLL_WIDTHS,
   VINYL_ROLL_WIDTHS,
@@ -92,6 +92,13 @@ import { mm2ToM2, roundTo, ceilToStep, MM_PER_M } from './units';
  * sheet lifts. 20 m² is where most UK fitters stop trusting tape.
  */
 export const VINYL_FULLY_BONDED_MIN_AREA_M2: M2 = 20;
+
+/**
+ * A minimum-charge shortfall smaller than this is absorbed into the job rather than shown. Under it
+ * the line is worth less than the paragraph it takes to explain, and a 20p "Minimum job charge" on a
+ * customer's quote reads as an error.
+ */
+export const MINIMUM_JOB_DE_MINIMIS = 5;
 
 /**
  * When a doorway is entered from both rooms it joins, the room with the "harder" floor decides
@@ -325,10 +332,16 @@ function prepare(project: Project): Prepared {
     if (areaMm2 <= 0) {
       warnings.push({ level: 'error', code: 'EMPTY_ROOM', message: `${room.name}: the outline has no area — enter its dimensions.`, subjectId: room.id });
     } else if (!simple) {
+      // Name the two features when the cause is a pair of recesses eating into the same corner: a
+      // generic "check the wall lengths" is no help against an outline the shape editor built.
+      const clash = room.shape.kind === 'rectangle_with_features' ? overlappingFeatures(room.shape.length, room.shape.width, room.shape.features ?? [])[0] : undefined;
+      const why = clash
+        ? `"${clash[0].label ?? 'recess'}" on the ${clash[0].wall} wall and "${clash[1].label ?? 'recess'}" on the ${clash[1].wall} wall cut into the same corner; reduce one of their depths or widths so they do not overlap.`
+        : 'Check the wall lengths (a recess deeper than the room, or points in the wrong order).';
       warnings.push({
         level: 'error',
         code: 'SELF_INTERSECTING',
-        message: `${room.name}: the outline crosses itself, so its area and the carpet it needs cannot be worked out — check the wall lengths (a recess deeper than the room, or points in the wrong order).`,
+        message: `${room.name}: the outline crosses itself, so its area and the carpet it needs cannot be worked out. ${why}`,
         subjectId: room.id,
       });
     }
@@ -577,14 +590,16 @@ class Bom {
  *   price = £/m² x roll width in m. A 9.9 lm order of a 4 m carpet at £22/m² is 9.9 x 88 = £871.20.
  * - Pack floors are bought by the pack for the whole project: the rooms' exact pack requirements
  *   are summed BEFORE rounding up, so two rooms needing 3.4 + 2.3 packs order 6, not 4 + 3 = 7.
- *   Stairs in a pack product add their gross cladding area. Whole units (packs, rolls, gripper
- *   packs, beading) round UP except within `OVER_RUN_TOLERANCE`, where the shortfall comes out of
- *   the offcuts and the note says so — 3.008 packs is three packs, not four.
+ *   Stairs in a pack product add their gross cladding area. Rigid pack goods round UP, full stop:
+ *   3.008 packs of laminate is four packs, because "the last 0.02 m²" is a whole plank that has to
+ *   exist. Continuous goods (gripper packs, beading, foam underlay) may round down within
+ *   `OVER_RUN_TOLERANCE`, where the shortfall genuinely does come out of the offcuts.
  * - Every covering line reports the same three figures: what is BOUGHT, the floor area, and the
  *   waste as a fraction of what is bought (`coverageNote`), so two lines can be compared.
  * - Underlay covers carpet rooms and carpet stair pads only; gripper only carpet (stairs included);
  *   door bars and door easing are counted once per PHYSICAL opening — doorways entered from both
- *   rooms are joined by `Doorway.sharedOpeningId`, never by matching their labels.
+ *   rooms are joined by `Doorway.sharedOpeningId`, never by matching their labels. The one door leaf
+ *   is credited to a side that needs easing, so pairing an opening can never delete the work.
  * - Sheet vinyl is fully bonded above `VINYL_FULLY_BONDED_MIN_AREA_M2` or when seamed, else
  *   perimeter-stuck with double-sided tape. Adhesive and tape are merged across rooms before
  *   rounding to tubs / rolls.
@@ -595,7 +610,8 @@ class Bom {
  * - Labour: fitting per m² of net room area by covering kind; stairs per step; uplift, disposal,
  *   smoothing compound and ply overlay per m² of the rooms they apply to; gripper removal, skirting
  *   refit, board preparation and moisture tests on their own quantities; door easing per door leaf;
- *   binding per metre of bound stair edge; and never less than `labour.minimumJobLabour` in total.
+ *   binding per metre of bound stair edge; and never less than `labour.minimumJobLabour` in total
+ *   (a shortfall under `MINIMUM_JOB_DE_MINIMIS` is absorbed instead of printed as a 20p line).
  * - Totals: materials + labour = subtotal; VAT at `prices.vatRate` when `prices.applyVat`.
  *
  * Worked example — a single 4.2 x 3.5 m bedroom in 4 m carpet at £18/m² with default prices:
@@ -741,37 +757,61 @@ export function estimateProject(project: Project): ProjectEstimate {
   }
 
   // ---- 8. floor preparation ----------------------------------------------------------------------------------
-  // Doors are eased once per DOOR LEAF. `doorBars` has already reduced the doorways to one line per
-  // physical opening (owned by the room whose covering decides the profile), so counting its lines
-  // cannot count a shared door twice. An external door is not eased for a new floor inside.
-  const doorLeavesByRoom = new Map<Id, number>();
-  for (const b of doorBars.bars) {
-    if (b.continuous || b.transition === 'none' || b.transition === 'external') continue;
-    doorLeavesByRoom.set(b.ownerId, (doorLeavesByRoom.get(b.ownerId) ?? 0) + 1);
-  }
+  // Owners the gripper order covers: new gripper cannot be nailed down on top of the old, so wherever
+  // the BOM buys gripper the old gripper has to come up — required work, not a "reuse it if it is
+  // sound" recommendation.
+  const newGripperOwners = new Set<Id>((gripper?.perOwner ?? []).filter((o) => o.lengths > 0).map((o) => o.ownerId));
   const prepRooms: PrepRoomInput[] = plannedRooms.map((r) => {
     const input: PrepRoomInput = {
       ownerId: r.room.id,
       ownerName: r.room.name,
       areaM2: r.areaM2,
       perimeter: r.perimeter,
-      doorwayCount: doorLeavesByRoom.get(r.room.id) ?? 0,
+      doorwayCount: 0, // filled in below, one leaf per physical opening
       subfloor: r.room.subfloor,
       covering: r.product.kind,
       underlayHasDpm: r.hardFloor.underlayHasDpm,
     };
+    if (newGripperOwners.has(r.room.id)) input.newGripper = true;
     const change = buildUpChange(r.product, r.room.subfloor, opts.underlay);
     if (change !== undefined) input.thicknessChange = change;
     if (!isBroadloomProduct(r.product) && isFloatingFloor(r.product.kind) && r.hardFloor.useBeading === false) input.refitSkirting = true;
     return input;
   });
+  // Doors are eased once per DOOR LEAF, and one leaf can be shared by two rooms. The leaf belongs to
+  // a side that actually needs easing: crediting it to whichever room won the door BAR loses the door
+  // altogether when that side's floor did not get thicker and the other side's did. An external door
+  // is eased like any other — a front door swings inward over the new carpet.
+  {
+    const byRoom = new Map<Id, PrepRoomInput>(prepRooms.map((r) => [r.ownerId, r]));
+    const openings = new Map<Id, Id[]>();
+    for (const r of plannedRooms) {
+      for (const d of r.doorways) {
+        if (d.continuous || d.transition === 'none') continue;
+        const openingId = d.sharedOpeningId?.trim() || d.id;
+        const rooms = openings.get(openingId) ?? [];
+        if (!rooms.includes(r.room.id)) rooms.push(r.room.id);
+        openings.set(openingId, rooms);
+      }
+    }
+    const wantsEasing = (id: Id): boolean => {
+      const input = byRoom.get(id);
+      return input !== undefined && needsDoorEasing(input);
+    };
+    for (const rooms of openings.values()) {
+      const ownerId = rooms.find(wantsEasing) ?? rooms[0];
+      const owner = ownerId !== undefined ? byRoom.get(ownerId) : undefined;
+      if (owner) owner.doorwayCount += 1;
+    }
+  }
   // Stairs need stripping, skipping and their gripper pulling just like a room — more so, in fact,
   // as it is the slowest uplift on the job. The "perimeter" of a flight is its gripper run.
+  // `isStaircase` keeps the room-only rules (latex, primer, ply, DPM, skirting) off the flight.
   for (const st of prep.stairs) {
     if (!st.plan || !st.product || !st.staircase.subfloor) continue;
     const areaM2 = isBroadloomProduct(st.product) ? mm2ToM2(st.plan.netAreaMm2) : (st.plan.hardFloorAreaM2 ?? 0);
     if (!(areaM2 > 0)) continue;
-    prepRooms.push({
+    const stairPrep: PrepRoomInput = {
       ownerId: st.staircase.id,
       ownerName: st.staircase.name,
       areaM2,
@@ -779,7 +819,10 @@ export function estimateProject(project: Project): ProjectEstimate {
       doorwayCount: 0,
       subfloor: st.staircase.subfloor,
       covering: st.product.kind,
-    });
+      isStaircase: true,
+    };
+    if (newGripperOwners.has(st.staircase.id)) stairPrep.newGripper = true;
+    prepRooms.push(stairPrep);
   }
   const floorPrep = planFloorPrep({ rooms: prepRooms, options: opts.floorPrep });
   warnings.push(...floorPrep.warnings);
@@ -837,9 +880,10 @@ export function estimateProject(project: Project): ProjectEstimate {
       if (product.packCoverageM2 > 0) exactPacks += sp.hardFloorGrossAreaM2 / product.packCoverageM2;
       owners.push(sp.staircaseId);
     }
-    // Packs round UP, but not for a rounding error's worth: 3.0076 packs is three packs and 0.02 m²
-    // to find in the offcuts, not a whole fourth pack (42% over the floor area). See OVER_RUN_TOLERANCE.
-    const { units: packs, shortfall } = wholeUnitsWithTolerance(exactPacks, 1);
+    // Rigid pack goods round UP, with no over-run tolerance. "Find the last 0.02 m² in the offcuts"
+    // works for a roll good; for a click floor it means a whole plank of the right length has to
+    // exist already, and 27 boards of 1.285 m do not cover 13 rows of 2.6 m. See OVER_RUN_TOLERANCE.
+    const packs = Math.ceil(exactPacks - 1e-9);
     const unit = product.kind === 'carpet_tiles' ? 'box' : 'pack';
     const unitPrice = product.pricePerPack ?? (product.pricePerM2 !== undefined ? money(product.pricePerM2 * product.packCoverageM2) : undefined);
     const boughtM2 = packs * product.packCoverageM2;
@@ -847,9 +891,6 @@ export function estimateProject(project: Project): ProjectEstimate {
       coverageNote(boughtM2, netM2),
       `${packs} ${unit}${packs === 1 ? '' : 's'} for ${fmtM2(netM2)} net + ${fmtPct(netM2 > 0 ? (grossM2 - netM2) / netM2 : 0)} cutting wastage = ${fmtM2(grossM2)}${stairPlansFor.length > 0 ? ' incl. stairs' : ''}`,
     ];
-    if (shortfall > 0) {
-      notes.push(`rounded down from ${roundTo(exactPacks, 3)} ${unit}s — ${fmtM2(shortfall * product.packCoverageM2)} to come out of the offcuts`);
-    }
     bom.add({
       id: `covering:${product.id}`,
       category: 'floor_covering',
@@ -891,14 +932,7 @@ export function estimateProject(project: Project): ProjectEstimate {
       exactQuantity: underlay.exactRolls,
       unitPrice,
       subjectIds: underlay.perOwner.map((o) => o.ownerId),
-      notes: [
-        `${fmtM2(underlay.totalAreaM2)} to cover; ${fmtM(underlay.stripLengthMm)} of strip off the roll`,
-        underlay.rollShortfall > 0
-          ? `rounded down from ${underlay.exactRolls} rolls — ${fmtM(underlay.rollShortfall)} to make up from offcuts`
-          : undefined,
-      ]
-        .filter((n): n is string => n !== undefined)
-        .join('; '),
+      notes: `${fmtM2(underlay.totalAreaM2)} to cover; ${fmtM(underlay.stripLengthMm)} of strip off the roll (${underlay.exactRolls} rolls)`,
     });
   }
   // hard floor underlay, merged per pack size
@@ -1360,7 +1394,9 @@ export function estimateProject(project: Project): ProjectEstimate {
   {
     const labourSoFar = money(bom.lines.filter((l) => l.category === 'labour').reduce((s, l) => s + (l.total ?? 0), 0));
     const minimum = prices.labour.minimumJobLabour;
-    if (minimum > 0 && labourSoFar > 0 && labourSoFar < minimum) {
+    // A shortfall of a few pounds is absorbed rather than printed: "Minimum job charge, 1 each @
+    // 0.20" with a paragraph explaining it is not a line anyone sends to a customer.
+    if (minimum > 0 && labourSoFar > 0 && minimum - labourSoFar > MINIMUM_JOB_DE_MINIMIS) {
       bom.add({
         id: 'labour:minimum',
         category: 'labour',

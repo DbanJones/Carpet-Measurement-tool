@@ -8,5 +8,6 @@ coverage
 playwright-report
 test-results
 
-# scratch probe files (agents and manual debugging); never part of the suite in CI
-src/**/__*.test.ts
+# scratch: throwaway scripts and probes. Kept OUT of src/ so vitest's include glob
+# ("src/**/*.test.{ts,tsx}") can never pick up a file CI does not see.
+scratch/

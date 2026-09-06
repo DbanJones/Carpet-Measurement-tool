@@ -26,7 +26,7 @@ import type {
 } from './types';
 import { isHardFloor } from './types';
 import { planRoom, type RoomPlan } from './broadloom';
-import { packOnRoll } from './packer';
+import { packOnRoll, rejectWarning } from './packer';
 import { fixingPerimeter, polygonAreaMm2, polygonPerimeter, distance, doorwaySegment } from './geometry';
 import { MAX_TOG_WITH_UFH, MAX_UNDERLAY_THICKNESS_ON_STAIRS } from './defaults';
 import { mm2ToM2, roundTo, ceilToStep } from './units';
@@ -42,10 +42,14 @@ import { mm2ToM2, roundTo, ceilToStep } from './units';
 export const UNDERLAY_PAD_WASTAGE = 0.1;
 
 /**
- * How far a requirement may overrun the last whole unit before another one is bought. Rolls of
- * underlay, packs of gripper and lengths of beading all carry an allowance for cuts already, and
- * every job leaves offcuts, so an overrun of up to 3 % of one unit (0.33 m of an 11 m roll, half a
- * gripper length in a pack of ten) is made up on site rather than ordered.
+ * How far a requirement may overrun the last whole unit before another one is bought. Packs of
+ * gripper, lengths of beading and rolls of foam underlay all carry an allowance for cuts already,
+ * and every job leaves offcuts, so an overrun of up to 3 % of one unit (half a gripper length in a
+ * pack of ten) is made up on site rather than ordered.
+ *
+ * It does NOT apply to goods cut with no allowance and no offcuts (carpet underlay: see
+ * `UNDERLAY_PLANNING`) or to rigid pack goods (laminate, LVT, tiles), where "make it up from the
+ * offcuts" means a whole plank of the right length has to exist already.
  */
 export const OVER_RUN_TOLERANCE = 0.03;
 
@@ -97,9 +101,12 @@ function wholeUnits(value: number, unit: number): number {
 
 /**
  * Whole units, but a requirement that overruns the last unit by less than `OVER_RUN_TOLERANCE` is
- * met from offcuts rather than by buying another one. 4.02 rolls of underlay is FOUR rolls and
- * 0.22 m to make up, not five: no merchant sells a fifth roll for 219 mm and no fitter buys one.
- * Returns the count and the shortfall (in the same unit as `value`) so the caller can say so.
+ * met from offcuts rather than by buying another one. 4.02 packs of gripper is FOUR packs and a
+ * fifth of a length to make up, not five packs. Returns the count and the shortfall (in the same
+ * unit as `value`) so the caller can say so.
+ *
+ * Only for goods that HAVE offcuts to make it up from: see `OVER_RUN_TOLERANCE`. Carpet underlay
+ * and rigid packs pass no tolerance (or use `wholeUnits`) and always round up.
  */
 export function wholeUnitsWithTolerance(value: number, unit: number, tolerance = OVER_RUN_TOLERANCE): { units: number; shortfall: number } {
   if (!(value > 0) || !(unit > 0)) return { units: 0, shortfall: 0 };
@@ -146,10 +153,8 @@ export interface UnderlayPlan {
   /** Linear length off the roll after packing every owner's strips together (mm). */
   stripLengthMm: Mm;
   rolls: number;
-  /** stripLengthMm / rollLength, rounded to 2 dp for the quote's transparency column. */
+  /** stripLengthMm / rollLength, rounded to 3 dp for the quote's transparency column. */
   exactRolls: number;
-  /** Length (mm) the rounded-down roll count leaves to make up from offcuts; 0 when it rounds up. */
-  rollShortfall: Mm;
   /** Total length of strip-to-strip joins to tape (mm). */
   tapeLength: Mm;
   tapeRolls: number;
@@ -185,15 +190,15 @@ export interface UnderlayInput {
  * strip planner cannot run without a roll width), `UNDERLAY_NO_AREA` (an area with neither outline nor
  * area), `UFH_TOG` (underfloor heating under an underlay above `MAX_UNDERLAY_TOG_WITH_UFH`),
  * `UNDERLAY_THICK_ON_STAIRS` (thicker than `MAX_UNDERLAY_THICKNESS_ON_STAIRS` under a stair area),
- * `UNDERLAY_OVER_RUN` (info: the roll count was rounded DOWN within `OVER_RUN_TOLERANCE` and this
- * much is to be made up from offcuts), plus any `EMPTY_ROOM` / `UNPLANNABLE` errors from the planner.
+ * `PIECE_TOO_WIDE` / `PIECE_NOT_MEASURABLE` (a strip the packer refused), plus any `EMPTY_ROOM` /
+ * `UNPLANNABLE` errors from the planner.
  */
 export function planUnderlay(input: UnderlayInput): UnderlayPlan {
   const { areas, options, accessories } = input;
   const warnings: Warning[] = [];
   const perOwner: UnderlayOwnerPlan[] = [];
 
-  const emptyPlan = (why: Warning): UnderlayPlan => ({ totalAreaM2: 0, stripLengthMm: 0, rolls: 0, exactRolls: 0, rollShortfall: 0, tapeLength: 0, tapeRolls: 0, perOwner, warnings: [why] });
+  const emptyPlan = (why: Warning): UnderlayPlan => ({ totalAreaM2: 0, stripLengthMm: 0, rolls: 0, exactRolls: 0, tapeLength: 0, tapeRolls: 0, perOwner, warnings: [why] });
 
   if (!options.fit) {
     return emptyPlan({ level: 'info', code: 'UNDERLAY_NOT_FITTED', message: 'No underlay: the carpet is felt-backed or stuck down.' });
@@ -270,25 +275,16 @@ export function planUnderlay(input: UnderlayInput): UnderlayPlan {
 
   const packed = packOnRoll({ rollWidth, pieces, usableOffcutMin: UNDERLAY_PLANNING.usableOffcutMin });
   for (const r of packed.rejected) {
-    warnings.push({
-      level: 'error',
-      code: 'PIECE_TOO_WIDE',
-      message: `${r.ownerName}: underlay piece "${r.label}" (${(r.width / 1000).toFixed(2)} m) is wider than the ${(rollWidth / 1000).toFixed(2)} m roll.`,
-      subjectId: r.ownerId,
-    });
+    warnings.push(rejectWarning(r, rollWidth, 'underlay piece'));
   }
   const stripLengthMm = packed.totalLength;
-  // 4.02 rolls is FOUR rolls plus 0.22 m made up from offcuts, not five: a whole 15 m² roll is not
-  // bought to supply 219 mm. See OVER_RUN_TOLERANCE.
-  const { units: rolls, shortfall: rollShortfall } = wholeUnitsWithTolerance(stripLengthMm, options.rollLength);
-  const exactRolls = options.rollLength > 0 ? roundTo(stripLengthMm / options.rollLength, 2) : 0;
-  if (rollShortfall > 0) {
-    warnings.push({
-      level: 'info',
-      code: 'UNDERLAY_OVER_RUN',
-      message: `${rolls} roll${rolls === 1 ? '' : 's'} of underlay leaves ${(rollShortfall / 1000).toFixed(2)} m to make up from offcuts (${exactRolls} rolls exactly). Add a roll if you would rather not.`,
-    });
-  }
+  // Rolls round UP, with no over-run tolerance. UNDERLAY_PLANNING adds no length or width allowance,
+  // so the strip length IS the requirement, and the strips are cut at full roll width, so there are
+  // no side offcuts to make a shortfall up from: 11.1 m of strip off an 11 m roll leaves 0.1 m of
+  // floor bare, not 0.1 m to find on site. See OVER_RUN_TOLERANCE, which is for goods that carry
+  // their own cutting allowance.
+  const rolls = wholeUnits(stripLengthMm, options.rollLength);
+  const exactRolls = options.rollLength > 0 ? roundTo(stripLengthMm / options.rollLength, 3) : 0;
   tapeLength = Math.ceil(tapeLength);
   const tapeRolls = wholeUnits(tapeLength, accessories.underlayTapeRollLength);
 
@@ -297,7 +293,6 @@ export function planUnderlay(input: UnderlayInput): UnderlayPlan {
     stripLengthMm,
     rolls,
     exactRolls,
-    rollShortfall,
     tapeLength,
     tapeRolls,
     perOwner,
@@ -424,8 +419,10 @@ export function needsGripper(covering: CoveringKind): boolean {
  *   (15 400 - 838) x 1.05 = 15 290.1 -> 15 291 mm -> 15 291 / 1520 = 10.06 -> 11 lengths -> 2 packs,
  *   timber pins.
  *
- * Warnings: `REUSE_GRIPPER` (info) when the room already has gripper down — sound gripper is often
- * left in place, so the fitter may need fewer lengths than quoted.
+ * Warnings: `REUSE_GRIPPER` (info) when the room already has gripper down. New gripper is ordered
+ * for every carpet room, and the old gripper cannot be left under it, so the floor-prep planner makes
+ * its removal required work (see floorprep's 'gripper-replace' rule); the note says so and offers the
+ * reuse route, which means taking both lines off.
  */
 export function planGripper(input: GripperInput): GripperPlan {
   const { options } = input;
@@ -448,7 +445,7 @@ export function planGripper(input: GripperInput): GripperPlan {
       warnings.push({
         level: 'info',
         code: 'REUSE_GRIPPER',
-        message: `${room.ownerName}: existing gripper — if it is sound it can be reused, reducing the gripper needed.`,
+        message: `${room.ownerName}: existing gripper is down. The quote assumes it comes up and new gripper goes down — both are in the totals. If it is sound and you mean to reuse it, take this room's gripper and its removal off.`,
         subjectId: room.ownerId,
       });
     }
@@ -593,7 +590,9 @@ export function doorBarsForWidth(width: Mm, options: AccessoryOptions): { bars: 
  * A door between two rooms is normally measured from both sides (each room's gripper stops at it),
  * so the two entries are joined by an explicit `Doorway.sharedOpeningId`: the second one is reported
  * (`DOORWAY_SHARED`, info) and not bought again — the first room planned wins the profile, which is
- * why the caller sorts hard floors first.
+ * why the caller sorts hard floors first. The WIDTH, though, is the wider of the two measurements: a
+ * long bar cuts down to a narrow opening, a short one cannot be stretched, so a 1.8 m opening
+ * measured 838 mm from the other side still buys a bar that covers it.
  *
  * Identity is NEVER guessed from the label. "Door", "Doorway" and "Door to landing" are what people
  * actually type, so two different doorways would collapse into one bar (a bar short on site) and one
@@ -614,9 +613,35 @@ export function planDoorBars(input: DoorBarInput): DoorBarPlan {
   const warnings: Warning[] = [];
   const lines: DoorBarLine[] = [];
   const totalsByType = Object.fromEntries(DOOR_BAR_TYPES.map((t) => [t, 0])) as Record<DoorBarType, number>;
-  const seenOpenings = new Map<Id, { ownerName: string; width: Mm; label: string }>();
+  const seenOpenings = new Map<Id, { ownerName: string; width: Mm; label: string; line: DoorBarLine; covering: CoveringKind }>();
   let standardBars = 0;
   let longBars = 0;
+
+  /** Count the bars an opening needs and add them to the running totals ('none' counts the opening itself). */
+  const countBars = (type: DoorBarType, width: Mm, sign: 1 | -1): { bars: number; longBars: number } => {
+    const count = type === 'none' ? { bars: 0, longBars: 0 } : doorBarsForWidth(width, options);
+    totalsByType[type] += sign * (type === 'none' ? 1 : count.bars + count.longBars);
+    standardBars += sign * count.bars;
+    longBars += sign * count.longBars;
+    return count;
+  };
+
+  /**
+   * A carpet room meeting a wide external threshold. Emitted when the line is created and again if a
+   * later, wider measurement of the same opening re-sizes it — a 2.4 m patio door measured 838 mm
+   * from the other side must not slip past this check.
+   */
+  const patioDoorWarning = (line: DoorBarLine, covering: CoveringKind, label: string): void => {
+    if (line.type === 'none' || line.transition !== 'external') return;
+    if (covering !== 'carpet' && covering !== 'carpet_tiles') return;
+    if (!(line.width > PATIO_DOOR_MIN_WIDTH)) return;
+    warnings.push({
+      level: 'info',
+      code: 'PATIO_DOOR',
+      message: `${line.ownerName}: "${label}" is a ${(line.width / 1000).toFixed(2)} m external opening — a cover strip or threshold plate may suit the patio track better than a single-edge bar.`,
+      subjectId: line.ownerId,
+    });
+  };
 
   for (const room of input.rooms) {
     room.doorways.forEach((d, i) => {
@@ -640,13 +665,24 @@ export function planDoorBars(input: DoorBarInput): DoorBarPlan {
             message: `${room.ownerName}: "${label}" is ${Math.round(width)} mm here and ${Math.round(seen.width)} mm in ${seen.ownerName} — the same opening cannot be two widths. The wider figure is used; re-measure it.`,
             subjectId: room.ownerId,
           });
+          // The wider figure really is used: a long bar cuts down to a short opening, a short bar
+          // cannot be stretched. Re-size the line already emitted for this opening rather than
+          // keeping whichever room happened to be planned first.
+          if (width > seen.width) {
+            countBars(seen.line.type, seen.width, -1);
+            const recount = countBars(seen.line.type, width, 1);
+            seen.line.width = width;
+            seen.line.bars = recount.bars;
+            seen.line.longBars = recount.longBars;
+            seen.width = width;
+            patioDoorWarning(seen.line, seen.covering, seen.label);
+          }
         }
         return;
       }
-      seenOpenings.set(openingId, { ownerName: room.ownerName, width, label });
       const type = doorBarTypeFor(room.covering, d.transition, d.continuous);
-      const count = type === 'none' ? { bars: 0, longBars: 0 } : doorBarsForWidth(width, options);
-      lines.push({
+      const count = countBars(type, width, 1);
+      const line: DoorBarLine = {
         ownerId: room.ownerId,
         ownerName: room.ownerName,
         doorwayId: d.id,
@@ -658,19 +694,10 @@ export function planDoorBars(input: DoorBarInput): DoorBarPlan {
         openingId,
         bars: count.bars,
         longBars: count.longBars,
-      });
-      totalsByType[type] += type === 'none' ? 1 : count.bars + count.longBars;
-      standardBars += count.bars;
-      longBars += count.longBars;
-
-      if (type !== 'none' && d.transition === 'external' && (room.covering === 'carpet' || room.covering === 'carpet_tiles') && width > PATIO_DOOR_MIN_WIDTH) {
-        warnings.push({
-          level: 'info',
-          code: 'PATIO_DOOR',
-          message: `${room.ownerName}: "${label}" is a ${(width / 1000).toFixed(2)} m external opening — a cover strip or threshold plate may suit the patio track better than a single-edge bar.`,
-          subjectId: room.ownerId,
-        });
-      }
+      };
+      lines.push(line);
+      seenOpenings.set(openingId, { ownerName: room.ownerName, width, label, line, covering: room.covering });
+      patioDoorWarning(line, room.covering, label);
       if (type === 'ramp' && d.transition === 'hard_floor') {
         const thick = room.productThickness !== undefined ? ` (${room.productThickness} mm floor)` : '';
         warnings.push({

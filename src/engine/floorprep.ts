@@ -79,6 +79,14 @@ export interface PrepRoomInput {
   refitSkirting?: boolean;
   /** Click floors: the underlay has an integral DPM. Defaults to `DEFAULT_HARD_FLOOR.underlayHasDpm`. */
   underlayHasDpm?: boolean;
+  /**
+   * This owner is a staircase, not a room. Only `STAIR_PREP_KINDS` can apply to it: everything else
+   * in the table is quantified over a floor area a flight does not have (you cannot pour latex or
+   * lay a 2440 x 1220 ply sheet down a staircase).
+   */
+  isStaircase?: boolean;
+  /** New gripper is being ordered for this owner, so the old gripper cannot be left down. */
+  newGripper?: boolean;
 }
 
 export interface PrepItem {
@@ -103,6 +111,14 @@ export interface FloorPrepPlan {
   /** Kinds that apply to each room, in trade sequence. */
   perRoom: Record<Id, PrepItemKind[]>;
 }
+
+/**
+ * The only preparation that can physically happen on a flight of stairs: the old covering comes off,
+ * goes in the skip, its gripper is pulled and a squeaking tread is screwed down. Levelling compound,
+ * primer, ply / hardboard overlay, a DPM and skirting are all measured over a floor area a staircase
+ * does not have, and none of them is a thing a fitter does to a flight.
+ */
+export const STAIR_PREP_KINDS: PrepItemKind[] = ['uplift', 'disposal', 'gripper_removal', 'secure_boards'];
 
 /** Coverings grouped by what they demand of the subfloor. */
 export type CoveringClass = 'carpet' | 'resilient' | 'click';
@@ -145,6 +161,8 @@ export interface PrepFlags {
   thicknessIncrease: boolean;
   refitSkirting: boolean;
   underfloorHeating: boolean;
+  /** New gripper is on the order for this owner (`PrepRoomInput.newGripper`). */
+  newGripper: boolean;
 }
 
 /**
@@ -163,6 +181,7 @@ export function prepFlags(room: PrepRoomInput): PrepFlags {
     thicknessIncrease: (room.thicknessChange ?? 0) > 0,
     refitSkirting: room.refitSkirting === true,
     underfloorHeating: sf.underfloorHeating === true,
+    newGripper: room.newGripper === true,
   };
 }
 
@@ -251,10 +270,18 @@ export const PREP_RULES: PrepRule[] = [
     steps: [step('uplift', true, 'existing {existing} to be lifted'), step('disposal', true, 'skip / tip charge for the old {existing}')],
   },
   {
+    // Only while no new gripper is on the order: you cannot fit a fresh length of gripper on top of
+    // the old one, so a quote that buys both must charge for taking the old one up (see below).
     id: 'gripper-reuse',
     kinds: ['carpet'],
-    flags: { existingGripper: true },
+    flags: { existingGripper: true, newGripper: false },
     steps: [step('gripper_removal', false, 'existing gripper can often be reused for a new carpet if it is sound')],
+  },
+  {
+    id: 'gripper-replace',
+    kinds: ['carpet'],
+    flags: { existingGripper: true, newGripper: true },
+    steps: [step('gripper_removal', true, 'new gripper is on the order for this floor, so the old gripper has to come up first')],
   },
   {
     id: 'gripper-remove',
@@ -538,6 +565,16 @@ export function matchingRules(room: PrepRoomInput, flags: PrepFlags = prepFlags(
   });
 }
 
+/**
+ * True when this room's rules call for the door leaf to be eased (a hard floor, or carpet whose
+ * build-up got thicker). One physical opening has ONE leaf, so the estimator credits it to a side
+ * that needs easing rather than to whichever side happened to win the door bar.
+ */
+export function needsDoorEasing(room: PrepRoomInput): boolean {
+  if (room.isStaircase) return false;
+  return matchingRules(room).some((r) => r.steps.some((s) => s.kind === 'door_easing'));
+}
+
 // ---------------------------------------------------------------------------
 // Quantities
 // ---------------------------------------------------------------------------
@@ -719,6 +756,7 @@ function describe(acc: Accumulator, options: FloorPrepOptions): string {
  * Items are merged by (kind, required, variant): a required latex line and a "recommended" latex
  * line stay separate so the quote can show the optional work. Rooms with no area are skipped with
  * a `NO_AREA` warning; a zero coverage / sheet size option yields `INVALID_PREP_OPTION` and no item.
+ * An owner flagged `isStaircase` is restricted to `STAIR_PREP_KINDS`.
  */
 export function planFloorPrep(input: { rooms: PrepRoomInput[]; options: FloorPrepOptions }): FloorPrepPlan {
   const { options } = input;
@@ -747,6 +785,8 @@ export function planFloorPrep(input: { rooms: PrepRoomInput[]; options: FloorPre
       }
     }
     for (const s of chosen.values()) {
+      // A staircase draws only the handful of steps that physically apply to a flight.
+      if (room.isStaircase && !STAIR_PREP_KINDS.includes(s.kind)) continue;
       const q = prepStepQuantity(s, room, options);
       if (!Number.isFinite(q.exact) || q.exact < 0) {
         pushUnique(invalidKinds, s.kind);

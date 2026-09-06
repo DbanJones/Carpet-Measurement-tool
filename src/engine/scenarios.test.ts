@@ -385,17 +385,18 @@ describe('scenario 4: a 2.6 x 2.4 m box room in 8 mm laminate, straight lay', ()
   it('orders 4 packs: 6.24 m² net + 7 % straight-lay wastage over 2.22 m² packs', () => {
     // net    = 2.6 x 2.4                       = 6.24 m²
     // gross  = 6.24 x 1.07                     = 6.6768 m²   (7 % is the straight / random-stagger figure)
-    // packs  = 6.6768 / 2.22 = 3.00757...      -> 3 packs: the 0.8 % overrun is inside
-    //          OVER_RUN_TOLERANCE, so the last 0.02 m² comes out of the offcuts rather than costing
-    //          a whole fourth pack (which would be 42 % more material than the floor).
+    // packs  = 6.6768 / 2.22 = 3.00757...      -> 4 packs. Three packs is 6.66 m², under the plan's
+    //          own gross figure, and a click floor cannot "make the last 0.02 m² up from the
+    //          offcuts": 13 rows of 2.6 m need a third plank in every row (2.6 / 1.285 = 2.02).
     expect(plan.netAreaM2).toBeCloseTo(6.24, 6);
     expect(plan.wastage).toBeCloseTo(0.07, 6);
     expect(plan.grossAreaM2).toBeCloseTo(6.6768, 6);
     expect(plan.exactPacks).toBeCloseTo(6.6768 / 2.22, 6);
     const laminate = bomLine(est, 'covering:laminate-oak');
-    expect(laminate).toMatchObject({ quantity: 3, unit: 'pack', unitPrice: 24, total: 72 });
-    // the note says what is BOUGHT, on the same basis as a broadloom line
-    expect(laminate.notes).toContain('6.66 m² bought for 6.24 m² of floor');
+    expect(laminate).toMatchObject({ quantity: 4, unit: 'pack', unitPrice: 24, total: 96 });
+    // what is bought covers the plan, and the note says so on the same basis as a broadloom line
+    expect(laminate.quantity * 2.22).toBeGreaterThanOrEqual(plan.grossAreaM2);
+    expect(laminate.notes).toContain('8.88 m² bought for 6.24 m² of floor');
   });
 
   it('takes 1 pack of floating-floor underlay', () => {

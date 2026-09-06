@@ -81,9 +81,9 @@ describe('ResultsPanel (compact)', () => {
   it('shows the headline figures for the sample house', () => {
     render(<ResultsPanel />);
     expect(screen.getByTestId('kpi-net-area').textContent).toBe('84.04 m²');
-    expect(screen.getByTestId('kpi-materials').textContent).toBe('£2,751.60');
-    expect(screen.getByTestId('kpi-labour').textContent).toBe('£1,318.33');
-    expect(screen.getByTestId('kpi-total').textContent).toBe('£4,883.92');
+    expect(screen.getByTestId('kpi-materials').textContent).toBe('£2,775.60');
+    expect(screen.getByTestId('kpi-labour').textContent).toBe('£1,454.62');
+    expect(screen.getByTestId('kpi-total').textContent).toBe('£5,076.26');
     expect(screen.getByText('Total inc VAT')).toBeTruthy();
     // the compact panel keeps the detail (waste, rolls) for the full page
     expect(screen.queryByTestId('kpi-waste')).toBeNull();
@@ -95,7 +95,7 @@ describe('ResultsPanel (compact)', () => {
     state().setProject(project);
     render(<ResultsPanel />);
     expect(screen.getByText('Subtotal (no VAT)')).toBeTruthy();
-    expect(screen.getByTestId('kpi-total').textContent).toBe('£4,069.93');
+    expect(screen.getByTestId('kpi-total').textContent).toBe('£4,230.22');
   });
 
   it('lists one line per roll plan and one per pack product', () => {
@@ -107,7 +107,7 @@ describe('ResultsPanel (compact)', () => {
 
     const packLines = screen.getAllByTestId('compact-pack-line').map((li) => li.textContent ?? '');
     expect(packLines).toHaveLength(2);
-    expect(packLines.some((t) => /^Oak effect laminate.*: 3 packs$/.test(t))).toBe(true);
+    expect(packLines.some((t) => /^Oak effect laminate.*: 4 packs$/.test(t))).toBe(true);
     expect(packLines.some((t) => /: 2 packs$/.test(t))).toBe(true);
   });
 
@@ -115,8 +115,8 @@ describe('ResultsPanel (compact)', () => {
     render(<ResultsPanel />);
     const list = screen.getByRole('list', { name: 'Warnings' });
     expect(within(list).getAllByRole('listitem')).toHaveLength(5);
-    // the sample house raises 19 notes
-    expect(screen.getByRole('button', { name: '14 more…' })).toBeTruthy();
+    // the sample house raises 21 notes
+    expect(screen.getByRole('button', { name: '16 more…' })).toBeTruthy();
   });
 
   it('switches to the Estimate tab from "Open full estimate"', () => {
@@ -131,16 +131,17 @@ describe('ResultsPanel (expanded)', () => {
   it('adds waste and rolls to the figures and groups every warning', () => {
     render(<ResultsPanel expanded />);
     expect(screen.getByTestId('kpi-net-area').textContent).toBe('84.04 m²');
-    expect(screen.getByTestId('kpi-total').textContent).toBe('£4,883.92');
+    expect(screen.getByTestId('kpi-total').textContent).toBe('£5,076.26');
     expect(screen.getByTestId('kpi-waste').textContent).toMatch(/^\d+\.\d%$/);
     expect(screen.getByTestId('kpi-rolls').textContent).toBe('4');
 
     const notes = screen.getByRole('list', { name: 'Notes' });
-    expect(within(notes).getAllByRole('listitem')).toHaveLength(18);
+    expect(within(notes).getAllByRole('listitem')).toHaveLength(19);
     expect(within(notes).getAllByText(/existing gripper/).length).toBeGreaterThan(0);
-    // one warning-level note among the eighteen information ones: the kitchen vinyl piece spans the
-    // full 3 m roll width with no trim, which the fitter has to check before ordering
+    // two warning-level notes beside the information ones: the kitchen vinyl piece spans the full
+    // 3 m roll width with no trim, and that same vinyl is planned with a seam to weld
     expect(screen.getAllByText(/less than 50 mm trim/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/cold-welded/).length).toBeGreaterThan(0);
   });
 
   it('draws a cutting plan, its cuts and its offcuts for every roll good', () => {
@@ -188,7 +189,7 @@ describe('ResultsPanel (expanded)', () => {
     const bom = within(screen.getByTestId('bom-table'));
     expect(bom.getAllByText(/Carpet gripper, timber pin/).length).toBe(1);
     expect(bom.getAllByRole('row').length).toBeGreaterThan(40);
-    expect(screen.getByTestId('bom-grand-total').textContent).toMatch(/£4,883\.92/);
+    expect(screen.getByTestId('bom-grand-total').textContent).toMatch(/£5,076\.26/);
   });
 
   it('downloads a non-empty CSV of the bill of materials', async () => {
@@ -281,7 +282,7 @@ describe('ResultsPanel helpers', () => {
     const packs = packSummaries(estimate, project);
     expect(packs.map((p) => p.productId)).toEqual(['prod-laminate-oak', 'prod-lvt-bathroom']);
     expect(packs[0]!.name).toBe('Oak effect laminate 8 mm, 1285 x 192 mm');
-    expect(packs[0]!.quantity).toBe(3);
+    expect(packs[0]!.quantity).toBe(4);
     expect(packs[0]!.unit).toBe('pack');
   });
 

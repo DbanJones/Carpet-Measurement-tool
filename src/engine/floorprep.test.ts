@@ -8,6 +8,8 @@ import {
   PREP_RULES,
   PREP_ITEM_SPECS,
   PREP_SEQUENCE,
+  STAIR_PREP_KINDS,
+  needsDoorEasing,
   POOR_SUBFLOOR_MIN_LATEX_THICKNESS,
   PLY_SKIM_LATEX_THICKNESS,
   type PrepRoomInput,
@@ -101,16 +103,18 @@ describe('rule table sanity', () => {
     expect(prepFlags(bare)).toEqual({
       existingCovering: false,
       existingGripper: false,
+      newGripper: false,
       dpmUnknown: false, // undefined is not "unknown": the rule needs an explicit false
       underlayHasDpm: true, // DEFAULT_HARD_FLOOR.underlayHasDpm
       thicknessIncrease: false,
       refitSkirting: false,
       underfloorHeating: false,
     });
-    const full = room('b', 'carpet', { type: 'concrete', existingCovering: 'carpet', existingGripper: true, dpmKnown: false, underfloorHeating: true }, { thicknessChange: 4, refitSkirting: true, underlayHasDpm: false });
+    const full = room('b', 'carpet', { type: 'concrete', existingCovering: 'carpet', existingGripper: true, dpmKnown: false, underfloorHeating: true }, { thicknessChange: 4, refitSkirting: true, underlayHasDpm: false, newGripper: true });
     expect(prepFlags(full)).toEqual({
       existingCovering: true,
       existingGripper: true,
+      newGripper: true,
       dpmUnknown: true,
       underlayHasDpm: false,
       thicknessIncrease: true,
@@ -627,6 +631,54 @@ describe('a whole house is ordered in trade sequence and is deterministic', () =
       bed: ['uplift', 'disposal', 'gripper_removal'],
     });
     expect(p.warnings.map((w) => w.code)).toEqual(['UNDERLAY_ON_BOARDS']);
+  });
+
+  it('a staircase draws only the preparation that can happen on a flight', () => {
+    // A flight of stairs has no floor to pour latex over, prime, or lay a 2440 x 1220 ply sheet on:
+    // the room rules quantify all of those over an area a staircase does not have.
+    const flight: PrepRoomInput = {
+      ownerId: 'st1',
+      ownerName: 'Stairs',
+      areaM2: 4.76,
+      perimeter: 22360,
+      doorwayCount: 0,
+      covering: 'carpet',
+      subfloor: { type: 'concrete', condition: 'poor', existingCovering: 'carpet', existingGripper: true },
+      isStaircase: true,
+      newGripper: true,
+    };
+    const p = plan([flight]);
+    expect(kinds(p)).toEqual(['uplift', 'disposal', 'gripper_removal']);
+    expect(kinds(p).every((k) => STAIR_PREP_KINDS.includes(k))).toBe(true);
+    // the same subfloor in a ROOM does get the levelling
+    const asRoom = plan([{ ...flight, ownerId: 'room', isStaircase: false }]);
+    expect(kinds(asRoom)).toContain('latex');
+    expect(kinds(asRoom)).toContain('primer');
+    // and a squeaking tread is still screwed down
+    const boards = plan([{ ...flight, subfloor: { type: 'floorboards', condition: 'poor', existingCovering: 'carpet', existingGripper: true }, covering: 'lvt_glue' }]);
+    expect(kinds(boards)).toContain('secure_boards');
+    expect(kinds(boards)).not.toContain('ply');
+  });
+
+  it('makes gripper removal required when new gripper is on the order for the same floor', () => {
+    // You cannot nail a new length of gripper down on top of the old one. A quote that buys a full
+    // set of new gripper AND leaves "remove existing gripper" out of the totals says both at once.
+    const base = { type: 'floorboards' as const, condition: 'good' as const, existingCovering: 'carpet' as const, existingGripper: true };
+    const replacing = plan([room('lounge', 'carpet', base, { newGripper: true })]);
+    expect(item(replacing, 'gripper_removal')!).toMatchObject({ required: true, quantity: 18 });
+    expect(item(replacing, 'gripper_removal')!.reason).toContain('new gripper is on the order');
+    // with no new gripper ordered, reuse is still the recommendation it always was
+    const reusing = plan([room('lounge', 'carpet', base)]);
+    expect(item(reusing, 'gripper_removal')!).toMatchObject({ required: false });
+    expect(item(reusing, 'gripper_removal')!.reason).toContain('can often be reused');
+  });
+
+  it('needsDoorEasing reports the rooms whose rules call for the leaf to come off', () => {
+    const concrete = { type: 'concrete' as const, condition: 'good' as const };
+    expect(needsDoorEasing(room('lounge', 'laminate', concrete))).toBe(true); // any hard floor
+    expect(needsDoorEasing(room('bed', 'carpet', concrete))).toBe(false); // like-for-like carpet
+    expect(needsDoorEasing(room('bed', 'carpet', concrete, { thicknessChange: 19.5 }))).toBe(true);
+    expect(needsDoorEasing({ ...room('st', 'carpet', concrete, { thicknessChange: 19.5 }), isStaircase: true })).toBe(false);
   });
 
   it('gives identical output for identical input and never mutates the input', () => {

@@ -152,6 +152,7 @@ export {
   isRectilinear,
   centroid,
   distance,
+  overlappingFeatures,
 } from './geometry';
 
 // ---- Broadloom planning: room -> pieces -> roll ------------------------------------------------
@@ -175,7 +176,7 @@ export { planUnderlay, planGripper, planDoorBars, planTapes, doorBarTypeFor, doo
 
 // ---- Floor preparation -------------------------------------------------------------------------
 export type { PrepRoomInput, PrepItem, PrepItemKind, FloorPrepPlan, CoveringClass } from './floorprep';
-export { planFloorPrep, coveringClass, COVERING_CLASS } from './floorprep';
+export { planFloorPrep, needsDoorEasing, coveringClass, COVERING_CLASS, STAIR_PREP_KINDS } from './floorprep';
 
 // ---- Hard floors and sheet vinyl sundries ------------------------------------------------------
 export type {

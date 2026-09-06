@@ -13,6 +13,7 @@
 import { estimateProject, compareRollWidths, dedupeWarnings, buildUpChange, fittingLabour } from './estimate';
 import { emptyProject, sampleProject, SAMPLE_IDS } from './fixtures';
 import { OVER_RUN_TOLERANCE, wholeUnitsWithTolerance } from './accessories';
+import { MINIMUM_JOB_DE_MINIMIS } from './estimate';
 import { CARPET_MAX_ROLL_LENGTH, VINYL_MAX_ROLL_LENGTH, CUT_INCREMENT, DEFAULT_PRICES, DEFAULT_UNDERLAY } from './defaults';
 import type { BomCategory, BomLine, BroadloomProduct, Mm, PackProduct, Project, Room, Staircase, Step, Subfloor, Warning } from './types';
 
@@ -329,9 +330,9 @@ describe('bill of materials', () => {
       expect(line.description.length).toBeGreaterThan(0);
       if (line.exactQuantity !== undefined) {
         expect(Number.isFinite(line.exactQuantity)).toBe(true);
-        // Whole units round UP from the exact requirement, except within OVER_RUN_TOLERANCE, where
-        // the last few per cent of a pack or roll comes out of the offcuts instead (and the note
-        // says so). 3.008 packs of laminate is three packs, not four.
+        // Whole units round UP from the exact requirement. Continuous goods (gripper packs, beading,
+        // foam underlay) may round down within OVER_RUN_TOLERANCE, where the last few per cent
+        // really does come out of the offcuts and the note says so.
         expect(line.quantity).toBeGreaterThanOrEqual(line.exactQuantity * (1 - OVER_RUN_TOLERANCE) - 1e-6);
       }
     }
@@ -399,18 +400,19 @@ describe('bill of materials', () => {
     expect(vinyl.total).toBe(355.2);
   });
 
-  it('charges pack floors by the pack', () => {
-    // box room 6.24 m² + 7% straight-lay wastage = 6.677 m²; 6.677 / 2.22 = 3.008 packs. The 0.8%
-    // overrun is inside OVER_RUN_TOLERANCE, so it is THREE packs (6.66 m²) and 0.02 m² out of the
-    // offcuts — not a fourth pack, 42% over the floor area, for a rounding error.
+  it('charges pack floors by the pack, rounding UP', () => {
+    // box room 6.24 m² + 7% straight-lay wastage = 6.677 m²; 6.677 / 2.22 = 3.008 packs -> FOUR
+    // packs. Three packs is 6.66 m² against a 6.677 m² plan, and "the last 0.02 m² comes out of the
+    // offcuts" is not a thing you can do with click planks: 27 boards of 1.285 m do not make 13 rows
+    // of 2.6 m. Rigid pack goods carry no over-run tolerance.
     const laminate = est.bom.find((l) => l.id === `bom:covering:${P.laminate}`)!;
     expect(laminate.unit).toBe('pack');
-    expect(laminate.quantity).toBe(3);
+    expect(laminate.quantity).toBe(4);
     expect(laminate.exactQuantity).toBeCloseTo(3.0075, 3);
-    expect(laminate.total).toBe(72);
+    expect(laminate.total).toBe(96);
     // the note says what is BOUGHT, not only the intermediate gross area
-    expect(laminate.notes).toContain('6.66 m² bought for 6.24 m² of floor');
-    expect(laminate.notes).toContain('offcuts');
+    expect(laminate.notes).toContain('8.88 m² bought for 6.24 m² of floor');
+    expect(laminate.notes).not.toContain('offcuts');
     // and a spare pack is offered separately rather than hidden in the rounding
     const spare = est.bom.find((l) => l.id === `bom:covering:${P.laminate}:spare`)!;
     expect(spare.quantity).toBe(1);
@@ -1000,6 +1002,129 @@ describe('regressions', () => {
     expect(removal.unitPrice).toBe(DEFAULT_PRICES.labour.gripperRemovalPerM);
   });
 
+  it('a staircase gets stair preparation, not room preparation: no latex, primer or ply on a flight', () => {
+    // The whole room rule table used to run over a staircase pushed into planFloorPrep: £125 of
+    // self-levelling compound poured down a flight of stairs, and two sheets of ply laid on it.
+    const stairs: Staircase = {
+      id: 'st',
+      name: 'Stairs',
+      productId: 'c',
+      steps: Array.from({ length: 13 }, (_, i) => ({ id: `s${i + 1}`, kind: 'straight', rise: 200, going: 223, width: 860 }) as Step),
+      landings: [],
+      method: 'cap_and_band',
+      openSides: 'none',
+      subfloor: { type: 'concrete', condition: 'poor', existingCovering: 'carpet', existingGripper: true, dpmKnown: true },
+    };
+    const est = estimateProject(house([], [stairs]));
+    const stairLines = est.bom.filter((l) => (l.subjectIds ?? []).includes('st')).map((l) => l.description);
+    for (const banned of ['Latex', 'Primer', 'Plywood', 'Ply fixing', 'Hardboard', 'smoothing compound', 'skirting', 'DPM']) {
+      expect([banned, stairLines.some((d) => d.includes(banned))]).toEqual([banned, false]);
+    }
+    // what a flight DOES need is still there
+    expect(stairLines.some((d) => /Uplift/.test(d))).toBe(true);
+    expect(stairLines.some((d) => /Remove existing gripper/.test(d))).toBe(true);
+  });
+
+  it('buys new gripper and charges for taking the old gripper up: the two lines have to agree', () => {
+    // The quote used to buy a full set of new gripper for every carpet room while showing the old
+    // gripper's removal as "recommended, excluded" — you cannot fit new gripper over the old.
+    const room = plainRoom('r', 'Room');
+    room.subfloor = { type: 'floorboards', condition: 'good', existingCovering: 'carpet', existingGripper: true };
+    const est = estimateProject(house([room]));
+    const newGripper = est.bom.find((l) => l.id.startsWith('bom:gripper:'))!;
+    expect(newGripper.quantity).toBeGreaterThan(0);
+    const removal = est.bom.find((l) => l.id.startsWith('bom:labour:gripper_removal'))!;
+    expect(removal.notes ?? '').not.toContain(RECOMMENDED);
+    expect(removal.total).toBeGreaterThan(0);
+    expect(est.bom.find((l) => l.id.startsWith('bom:prep:gripper_removal'))!.id).toContain(':required:');
+  });
+
+  it('eases the door leaf when EITHER side of a shared opening needs it', () => {
+    // Pairing two rooms with sharedOpeningId used to credit the leaf to whichever room won the door
+    // BAR: where that side needed no easing and the other did, the door vanished from the quote.
+    const tiles: PackProduct = { id: 'ct', name: 'Carpet tiles', kind: 'carpet_tiles', packCoverageM2: 5, thickness: 6, pricePerPack: 60 };
+    const study = plainRoom('study', 'Study', [{ id: 'ds', edgeIndex: 0, offset: 500, width: 838, transition: 'carpet', sharedOpeningId: 'op' }]);
+    study.productId = 'ct';
+    // carpet tiles over old carpet: 6 mm replacing 20 mm of carpet + underlay, so nothing to ease
+    study.subfloor = { type: 'concrete', condition: 'good', existingCovering: 'carpet', dpmKnown: true };
+    const lounge = plainRoom('lounge', 'Lounge', [{ id: 'dl', edgeIndex: 0, offset: 500, width: 838, transition: 'carpet', sharedOpeningId: 'op' }]);
+    lounge.subfloor = { type: 'concrete', condition: 'good', existingCovering: 'vinyl', dpmKnown: true };
+
+    const paired = estimateProject(house([study, lounge], [], [carpet, tiles]));
+    const easing = paired.bom.filter((l) => /Ease \/ trim doors/.test(l.description));
+    expect(easing.length).toBeGreaterThan(0);
+    // one leaf, not two: the opening is still counted once
+    expect(easing.every((l) => l.quantity === 1)).toBe(true);
+
+    // and the same two rooms with the opening left unpaired agree
+    const loneLounge = { ...lounge, doorways: [{ id: 'dl', edgeIndex: 0, offset: 500, width: 838, transition: 'carpet' as const }] };
+    const unpaired = estimateProject(house([study, loneLounge], [], [carpet, tiles]));
+    expect(unpaired.bom.filter((l) => /Ease \/ trim doors/.test(l.description)).length).toBe(easing.length);
+  });
+
+  it('eases an external door too: a front door swings inward over the new floor', () => {
+    const hall = plainRoom('hall', 'Hall', [{ id: 'd', edgeIndex: 0, offset: 500, width: 900, transition: 'external', label: 'Front door' }]);
+    hall.subfloor = { type: 'concrete', condition: 'good', existingCovering: 'vinyl', dpmKnown: true };
+    const est = estimateProject(house([hall]));
+    const easing = est.bom.find((l) => l.id.startsWith('bom:labour:door_easing'))!;
+    expect(easing.quantity).toBe(1);
+    // an opening with nothing on the other side still has no leaf to ease
+    const wardrobe = plainRoom('w', 'Wardrobe recess', [{ id: 'd2', edgeIndex: 0, offset: 500, width: 900, transition: 'none' }]);
+    wardrobe.subfloor = hall.subfloor;
+    expect(estimateProject(house([wardrobe])).bom.find((l) => l.id.startsWith('bom:labour:door_easing'))).toBeUndefined();
+  });
+
+  it('absorbs a de-minimis minimum-charge shortfall instead of printing a 20p line', () => {
+    const stairs: Staircase = {
+      id: 'st',
+      name: 'Stairs',
+      productId: 'c',
+      steps: Array.from({ length: 13 }, (_, i) => ({ id: `s${i + 1}`, kind: 'straight', rise: 200, going: 223, width: 860 }) as Step),
+      landings: [],
+      method: 'cap_and_band',
+      openSides: 'none',
+    };
+    // 13 steps at £12 = £156 of labour; against a £158 minimum the shortfall is £2, which is not a
+    // line item — "Minimum job charge, 1 each @ 0.20" with a paragraph of explanation is not
+    // something anyone sends a customer.
+    const p = house([], [stairs]);
+    p.prices = { ...p.prices, labour: { ...p.prices.labour, minimumJobLabour: 158 } };
+    const est = estimateProject(p);
+    expect(est.totals.labourCost).toBe(156);
+    expect(est.bom.find((l) => l.id === 'bom:labour:minimum')).toBeUndefined();
+
+    // a shortfall worth charging for is still charged, and lifts the total to the minimum
+    const real = house([], [stairs]);
+    const realEst = estimateProject(real);
+    const minimum = realEst.bom.find((l) => l.id === 'bom:labour:minimum')!;
+    expect(minimum.total).toBeGreaterThan(MINIMUM_JOB_DE_MINIMIS);
+    expect(realEst.totals.labourCost).toBe(real.prices.labour.minimumJobLabour);
+  });
+
+  it('names the two features when a pair of recesses meet in a corner', () => {
+    const room: Room = {
+      id: 'r',
+      name: 'Odd room',
+      shape: {
+        kind: 'rectangle_with_features',
+        length: 2493,
+        width: 2672,
+        features: [
+          { id: 'f1', wall: 'left', offset: 536, width: 481, depth: -971, label: 'Meter cupboard' },
+          { id: 'f2', wall: 'bottom', offset: 2285, width: 1149, depth: -1839, label: 'Chimney breast' },
+        ],
+      },
+      doorways: [],
+      productId: 'c',
+      subfloor: { type: 'floorboards', condition: 'good' },
+    };
+    const est = estimateProject(house([room]));
+    const why = est.warnings.find((w) => w.code === 'SELF_INTERSECTING')!;
+    expect(why.message).toContain('Meter cupboard');
+    expect(why.message).toContain('Chimney breast');
+    expect(why.message).not.toContain('points in the wrong order');
+  });
+
   it('never lists a required item with no price and no labour counterpart', () => {
     const est = estimateProject(sampleProject());
     for (const line of est.bom) {
@@ -1021,7 +1146,8 @@ describe('regressions', () => {
   });
 
   it('makes up a small over-run from the offcuts instead of buying another whole unit', () => {
-    // 4.02 rolls of underlay used to buy FIVE: a 15 m² roll to supply 219 mm.
+    // Continuous goods only (gripper packs, beading lengths, foam underlay rolls): 4.02 units used
+    // to buy FIVE — a whole unit to supply 219 mm. Carpet underlay and rigid packs round up instead.
     const over = wholeUnitsWithTolerance(44_219, 11_000);
     expect(over.units).toBe(4);
     expect(over.shortfall).toBeCloseTo(219, 6);

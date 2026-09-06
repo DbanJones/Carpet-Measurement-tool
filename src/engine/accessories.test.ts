@@ -46,13 +46,13 @@ describe('planUnderlay', () => {
   it('4.2 x 3.5 m bedroom: 3 strips of 1.37 m along the 4.2 m = 12.6 m -> 2 rolls of 11 m (1.15 exact)', () => {
     // along the 4.2 m: 3500 / 1370 = 2.55 -> 3 strips x 4200 = 12 600
     // along the 3.5 m: 4200 / 1370 = 3.07 -> 4 strips x 3500 = 14 000  -> keep 12 600
-    // rolls: 12 600 / 11 000 = 1.1454.. -> 2 (exact 1.15)
+    // rolls: 12 600 / 11 000 = 1.1454.. -> 2 (exact 1.145)
     // tape: 2 joins x 4200 = 8 400 -> 8 400 / 50 000 -> 1 roll
     const plan = planUnderlay({ areas: [{ ownerId: 'bed', ownerName: 'Bedroom', polygon: bedroom }], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
     expect(plan.totalAreaM2).toBeCloseTo(14.7, 6);
     expect(plan.stripLengthMm).toBe(12600);
     expect(plan.rolls).toBe(2);
-    expect(plan.exactRolls).toBe(1.15);
+    expect(plan.exactRolls).toBe(1.145);
     expect(plan.tapeLength).toBe(8400);
     expect(plan.tapeRolls).toBe(1);
     expect(plan.perOwner).toEqual([{ ownerId: 'bed', ownerName: 'Bedroom', strips: 3, lengthMm: 12600, areaM2: 14.7 }]);
@@ -75,7 +75,7 @@ describe('planUnderlay', () => {
     expect(plan.totalAreaM2).toBeCloseTo(16.5, 6);
     expect(plan.stripLengthMm).toBe(13800);
     expect(plan.rolls).toBe(2);
-    expect(plan.exactRolls).toBe(1.25);
+    expect(plan.exactRolls).toBe(1.255);
     expect(plan.tapeLength).toBe(9600);
     expect(plan.perOwner[1]).toEqual({ ownerId: 'hall', ownerName: 'Hall', strips: 3, lengthMm: 1800, areaM2: 1.8 });
   });
@@ -104,7 +104,7 @@ describe('planUnderlay', () => {
     expect(plan.totalAreaM2).toBe(4.5);
     expect(plan.stripLengthMm).toBe(3614);
     expect(plan.rolls).toBe(1);
-    expect(plan.exactRolls).toBe(0.33);
+    expect(plan.exactRolls).toBe(0.329);
     expect(plan.tapeLength).toBe(0);
     expect(plan.tapeRolls).toBe(0);
     expect(plan.perOwner).toEqual([{ ownerId: 'st', ownerName: 'Stairs', strips: 1, lengthMm: 3614, areaM2: 4.5 }]);
@@ -122,7 +122,7 @@ describe('planUnderlay', () => {
     const plan = planUnderlay({ areas: [{ ownerId: 'wc', ownerName: 'WC', polygon: shapeToPolygon({ kind: 'rectangle', length: 500, width: 400 }) }], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
     expect(plan.stripLengthMm).toBe(400);
     expect(plan.rolls).toBe(1);
-    expect(plan.exactRolls).toBe(0.04);
+    expect(plan.exactRolls).toBe(0.036);
     expect(plan.perOwner[0]!.strips).toBe(1);
     expect(plan.tapeLength).toBe(0);
   });
@@ -143,7 +143,51 @@ describe('planUnderlay', () => {
     // 220 000 / 15 000 = 14.67 -> 15 rolls
     const long = planUnderlay({ areas: [{ ownerId: 'h', ownerName: 'Hall', polygon: big }], options: { ...DEFAULT_UNDERLAY, rollLength: 15000 }, accessories: DEFAULT_ACCESSORIES });
     expect(long.rolls).toBe(15);
-    expect(long.exactRolls).toBe(14.67);
+    expect(long.exactRolls).toBe(14.667);
+  });
+
+  it('never buys less underlay than the floor it covers: the roll count rounds UP with no over-run tolerance', () => {
+    // 3.7 x 4.1 m: strips along the 3.7 m = 3 x 3700 = 11 100 mm off an 11 000 mm roll. Rounded down
+    // that is ONE roll = 15.07 m² against a 15.17 m² floor, with no offcut to make up the difference
+    // (UNDERLAY_PLANNING adds no allowances and the strips are cut full roll width).
+    const rollAreaM2 = (DEFAULT_UNDERLAY.rollWidth * DEFAULT_UNDERLAY.rollLength) / 1e6;
+    const room = shapeToPolygon({ kind: 'rectangle', length: 3700, width: 4100 });
+    const plan = planUnderlay({ areas: [{ ownerId: 'r', ownerName: 'Room', polygon: room }], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
+    expect(plan.stripLengthMm).toBe(11100);
+    expect(plan.rolls).toBe(2);
+    expect(plan.rolls * rollAreaM2).toBeGreaterThanOrEqual(plan.totalAreaM2);
+    // and no message promising offcuts that do not exist
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('every rectangle from 2.0 x 2.0 m to 8.0 x 5.0 m buys at least the strip it plans to cut', () => {
+    const rollAreaM2 = (DEFAULT_UNDERLAY.rollWidth * DEFAULT_UNDERLAY.rollLength) / 1e6;
+    const short: string[] = [];
+    for (let length = 2000; length <= 8000; length += 500) {
+      for (let width = 2000; width <= 5000; width += 500) {
+        const polygon = shapeToPolygon({ kind: 'rectangle', length, width });
+        const plan = planUnderlay({ areas: [{ ownerId: 'r', ownerName: 'Room', polygon }], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
+        if (plan.rolls * DEFAULT_UNDERLAY.rollLength + 1e-6 < plan.stripLengthMm) short.push(`${length}x${width} strip`);
+        if (plan.rolls * rollAreaM2 + 1e-9 < plan.totalAreaM2) short.push(`${length}x${width} area`);
+      }
+    }
+    expect(short).toEqual([]);
+  });
+
+  it('a strip the packer refuses is diagnosed, not mislabelled "wider than the roll"', () => {
+    // a recess that runs the full depth of the room leaves zero-length fills; 0.13 m is not wider
+    // than a 1.37 m roll, and a fitter chasing that message has nothing to act on
+    const throughRecess = shapeToPolygon({
+      kind: 'rectangle_with_features',
+      length: 5000,
+      width: 4000,
+      features: [{ id: 'f1', wall: 'top', offset: 1750, width: 1500, depth: -4000, label: 'Recess' }],
+    });
+    const plan = planUnderlay({ areas: [{ ownerId: 'r', ownerName: 'Room', polygon: throughRecess }], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
+    const rejected = plan.warnings.filter((w) => w.level === 'error');
+    expect(rejected.map((w) => w.code)).toContain('PIECE_NOT_MEASURABLE');
+    expect(rejected.every((w) => !/wider than/.test(w.message))).toBe(true);
+    expect(rejected[0]!.message).toContain('underlay piece');
   });
 
   it('fit=false returns zeros with an info note', () => {
@@ -170,7 +214,7 @@ describe('planUnderlay', () => {
 
   it('no areas at all -> zeros and no warnings', () => {
     const plan = planUnderlay({ areas: [], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
-    expect(plan).toEqual({ totalAreaM2: 0, stripLengthMm: 0, rolls: 0, exactRolls: 0, rollShortfall: 0, tapeLength: 0, tapeRolls: 0, perOwner: [], warnings: [] });
+    expect(plan).toEqual({ totalAreaM2: 0, stripLengthMm: 0, rolls: 0, exactRolls: 0, tapeLength: 0, tapeRolls: 0, perOwner: [], warnings: [] });
   });
 
   it('an area with neither outline nor area is skipped with UNDERLAY_NO_AREA; an empty outline is an EMPTY_ROOM error', () => {
@@ -451,7 +495,7 @@ describe('planDoorBars', () => {
     expect(plan.warnings).toEqual([]);
   });
 
-  it('flags two sides of one opening measured at different widths and uses the first', () => {
+  it('flags two sides of one opening measured at different widths and uses the WIDER, as the warning says', () => {
     const plan = planDoorBars({
       rooms: [
         { ownerId: 'a', ownerName: 'Hall', covering: 'carpet', doorways: [dw(838, 'carpet', { id: 'a1', sharedOpeningId: 'op' })] },
@@ -460,8 +504,50 @@ describe('planDoorBars', () => {
       options: DEFAULT_ACCESSORIES,
     });
     expect(plan.bars).toHaveLength(1);
-    expect(plan.bars[0]!.width).toBe(838);
+    expect(plan.bars[0]!.width).toBe(926);
     expect(plan.warnings.map((w) => w.code)).toEqual(['DOORWAY_SHARED', 'DOORWAY_WIDTH_MISMATCH']);
+  });
+
+  it('re-sizes the bar when the second side of an opening is much wider: a 1.8 m opening buys a long bar, not a 0.9 m one', () => {
+    // Room A measured the opening at 838 mm, room B at 1800 mm. One 900 mm bar cannot cover 1.8 m,
+    // and a long bar cuts down where a short one cannot be stretched, so the wider figure wins.
+    const plan = planDoorBars({
+      rooms: [
+        { ownerId: 'a', ownerName: 'Room A', covering: 'carpet', doorways: [dw(838, 'carpet', { id: 'a1', sharedOpeningId: 'op' })] },
+        { ownerId: 'b', ownerName: 'Room B', covering: 'carpet', doorways: [dw(1800, 'carpet', { id: 'b1', sharedOpeningId: 'op' })] },
+      ],
+      options: DEFAULT_ACCESSORIES,
+    });
+    expect(plan.bars).toHaveLength(1);
+    expect(plan.bars[0]).toMatchObject({ ownerId: 'a', width: 1800, bars: 0, longBars: 1, type: 'double_carpet' });
+    expect(plan.standardBars).toBe(0);
+    expect(plan.longBars).toBe(1);
+    expect(plan.totalsByType.double_carpet).toBe(1);
+  });
+
+  it('a narrower second measurement leaves the bar alone', () => {
+    const plan = planDoorBars({
+      rooms: [
+        { ownerId: 'a', ownerName: 'Room A', covering: 'carpet', doorways: [dw(1800, 'carpet', { id: 'a1', sharedOpeningId: 'op' })] },
+        { ownerId: 'b', ownerName: 'Room B', covering: 'carpet', doorways: [dw(838, 'carpet', { id: 'b1', sharedOpeningId: 'op' })] },
+      ],
+      options: DEFAULT_ACCESSORIES,
+    });
+    expect(plan.bars[0]).toMatchObject({ width: 1800, bars: 0, longBars: 1 });
+    expect(plan.longBars).toBe(1);
+    expect(plan.standardBars).toBe(0);
+  });
+
+  it('the patio-door note follows the wider measurement even when the narrow side was planned first', () => {
+    const plan = planDoorBars({
+      rooms: [
+        { ownerId: 'a', ownerName: 'Hall', covering: 'carpet', doorways: [dw(838, 'external', { id: 'a1', sharedOpeningId: 'op', label: 'Patio' })] },
+        { ownerId: 'b', ownerName: 'Lounge', covering: 'carpet', doorways: [dw(2400, 'external', { id: 'b1', sharedOpeningId: 'op', label: 'Patio' })] },
+      ],
+      options: DEFAULT_ACCESSORIES,
+    });
+    expect(plan.bars[0]).toMatchObject({ width: 2400, longBars: 1 });
+    expect(plan.warnings.map((w) => w.code)).toContain('PATIO_DOOR');
   });
 
   it('sizes the bar from the opening as it lands on the wall when the outline is given', () => {

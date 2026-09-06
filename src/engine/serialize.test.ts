@@ -101,6 +101,38 @@ describe('round trip', () => {
     expect(res.project).toEqual(original);
   });
 
+  it('round-trips EVERY numeric option, so a newly added option cannot be silently dropped', () => {
+    // `primerCanLitres` was added to FloorPrepOptions and to the defaults but not to the parser's
+    // spec map, and mergeGroup only copies keys the spec map names: the saved value was thrown away
+    // on load with no repair warning, autosave included. This walks every numeric option instead.
+    const original = sampleProject();
+    const groups = ['broadloom', 'hardFloor', 'underlay', 'accessories', 'floorPrep'] as const;
+    const changed: Record<string, Record<string, number>> = {};
+    for (const group of groups) {
+      const opts = original.options[group] as unknown as Record<string, unknown>;
+      const patch: Record<string, number> = {};
+      for (const [key, value] of Object.entries(opts)) {
+        if (typeof value !== 'number') continue;
+        patch[key] = value + 1; // a value no default would produce
+        (opts as Record<string, number>)[key] = value + 1;
+      }
+      changed[group] = patch;
+    }
+    const res = ok(parseProject(serializeProject(original)));
+    const lost: string[] = [];
+    for (const group of groups) {
+      const loaded = res.project.options[group] as unknown as Record<string, number>;
+      for (const [key, value] of Object.entries(changed[group]!)) {
+        // Either the value survives, or the parser says out loud that it changed it (a value out of
+        // the field's range is repaired with a warning). What must never happen is a silent reset.
+        if (loaded[key] !== value && !anyWarning(res.warnings, new RegExp(key))) {
+          lost.push(`${group}.${key}: saved ${value} -> loaded ${String(loaded[key])}`);
+        }
+      }
+    }
+    expect(lost).toEqual([]);
+  });
+
   it('restores every optional field and leaves absent ones absent', () => {
     const original = sampleProject();
     const res = ok(parseProject(serializeProject(original)));

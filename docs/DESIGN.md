@@ -75,15 +75,20 @@ piece: width = span + width allowance (capped at the roll), length = extent + le
 side of the room it falls on.
 
 Sheet vinyl has two extra rules: no fill narrower than `VINYL_MIN_FILL_WIDTH` (600 mm — a 300 mm
-strip of cushioned vinyl will not lie flat), and a warning when a plan needs more than one seam, to
-push the estimator at a wider roll before ordering.
+strip of cushioned vinyl will not lie flat), and a warning as soon as a plan needs *any* seam
+(`VINYL_SEAM`), naming the wider roll widths the product lists. The first seam is the one worth
+avoiding: it is what forces a cold weld and a fully bonded floor.
 
 ### 3. Pile direction (`rollplan.chooseDirections`)
 
 With direction on *auto* the room is planned both ways and packed; the shorter roll length wins, with
-each seam priced in at `balancedThresholdM2 / rollWidth` of roll length. A 5 m x 6 m room from a 4 m
-roll therefore runs *across* (2 x 5.1 m = 10.2 lm) rather than along (6.1 + 6.1 = 12.2 lm) — exactly
-the call a good estimator makes.
+each seam priced in at `balancedThresholdM2 / rollWidth` of roll length. Take a 5 m x 6 m room on a
+4 m roll: across the room is two 5.1 m drops = 10.2 lm; along it is a 6.1 m main piece plus a 6.1 m
+fill = 12.2 lm. Under `seamPolicy: 'min_seams'` the planner takes the 10.2 lm across-the-room plan.
+Under the shipped default (*balanced*) it goes further, because cross joins are scored inside the
+direction choice (section 4): the along-the-room fill is cut as three 2.08 m strips out of one 2.1 m
+cross-cut, which brings that plan to **8.2 lm** and wins. Either way the answer is the one a good
+estimator gives, and the room reports the seam it bought (`CROSS_JOIN`).
 
 The choice is made for the **roll**, not the room. Each room starts on its own best direction, then
 the whole product's piece set — every room plus the stair pieces — is re-packed while turning one
@@ -93,8 +98,15 @@ landing turned to sit beside the hall in a single cut: 2.1 lm of carpet thrown a
 taken before the packer ever ran. Each room also offers its fewest-seams plan as a candidate, so a
 seam can never survive that does not shorten what is ordered.
 
-Rooms joined by a `continuous` doorway are checked afterwards: if the carpet runs through an opening
-but the pile runs different ways either side, the shading will show, and the estimate says so.
+Rooms joined *to each other* by a `continuous` opening (they share a `sharedOpeningId` and at least
+one side marks it continuous) are checked afterwards: if the carpet runs through the opening but the
+pile runs different ways either side, the shading will show, and the estimate says so
+(`PILE_DIRECTION_SPLIT`). Two rooms that each run continuously into somewhere *else* are not on the
+same run and are left alone.
+
+Turning a room to suit the rest of the roll can also buy it a seam it would not need on its own.
+That is usually the right trade, but it is the estimator's trade to make, so the room says what it
+bought and what the roll saved (`ROLL_SEAM_TRADE`).
 
 ### 4. Cross joins (`rollplan.applyCrossJoins`)
 
@@ -124,15 +136,19 @@ and the tool compares alternative roll widths so the user can see when a 5 m rol
 Steps are listed from the bottom; each is a riser plus the tread above it, so the top riser wraps onto
 the landing nosing — and because that top step has no tread of its own, it takes one gripper length
 (the riser foot) rather than two, and no underlay pad. The wrap length per step is rise + going + nosing overhang. *Cap and band* cuts one
-piece per step (length + 50 mm tuck, width + 50 mm for closed strings); *waterfall* makes one piece per
+piece per step (length + 30 mm tuck + 75 mm cap-and-band wrap, width + 100 mm for closed strings —
+50 mm each side — plus 150 mm per open string and the bullnose wrap); *waterfall* makes one piece per
 straight run (winders and landings break runs). Open sides add a wrap allowance and binding length;
 bullnose steps add 1.6 x projection + tuck for the curve; winders are cut from the bounding rectangle
-of the kite. Gripper is two lengths per step, underlay one pad per TREAD (going + 50 mm over the nosing; UK
+of the kite. Gripper is two lengths per step — one for the top step, whose tread is the landing, and three on a
+winder, whose long back edge takes an extra length — underlay one pad per TREAD (going + 50 mm over the nosing; UK
 practice leaves the risers bare, and `underlayRisers` switches to the full flight), stair rods for
 runners, and one nosing profile per step for hard floors. Stair pieces go into the same roll plan as
 the rooms so hall and landing offcuts are used, and a staircase's own subfloor goes through the same
-floor-preparation rules as a room: a flight of old carpet has to be stripped, skipped and its gripper
-pulled like any floor.
+floor-preparation rules as a room, restricted to the ones that can physically happen on a flight
+(`STAIR_PREP_KINDS`: uplift, disposal, gripper removal, securing boards). A flight of old carpet has
+to be stripped, skipped and its gripper pulled like any floor; you cannot pour levelling compound
+down it or lay a 2440 x 1220 sheet of ply on it.
 
 ## Floor plans
 
@@ -151,20 +167,67 @@ uplift/disposal, moisture test, primer, smoothing compound (bags from thickness 
 mm), liquid or sheet DPM, plywood or hardboard overlay with fixings, securing/sanding boards, door
 easing, skirting refit. Items are marked required or recommended with the reason shown on the estimate.
 
+Two rules exist to keep the quote consistent with itself:
+
+* **Gripper.** New gripper is ordered for every carpet room, and it cannot be nailed down on top of
+  the old, so where the BOM buys gripper for a floor (`newGripper`), lifting the old gripper is
+  *required* work in the totals — not the "reuse it if it is sound" recommendation it is when no new
+  gripper is on the order.
+* **Stairs.** A staircase goes through the same table, restricted to `STAIR_PREP_KINDS` — uplift,
+  disposal, gripper removal, securing boards. The rest of the table is quantified over a floor area a
+  flight does not have.
+
 ## Quantities, rounding and warnings
 
-Whole units round up, except within a 3% over-run tolerance where the shortfall is made up from the
-offcuts and the line says so: 4.02 rolls of underlay is four rolls, not a fifth 15 m² roll to supply
-219 mm. Every covering line reports the same three figures — what is bought, the floor area, and the
-waste as a fraction of what is bought — so a carpet line and a laminate line on one page can be
-compared.
+Whole units round up. Continuous goods that carry their own cutting allowance and leave offcuts —
+packs of gripper, lengths of beading, rolls of floating-floor foam — may round DOWN within a 3%
+over-run tolerance, with the line saying what is to be made up from the offcuts: 4.02 packs is four
+packs, not a fifth bought to supply half a length.
+
+Two things are deliberately outside that tolerance:
+
+* **Carpet underlay.** The strip planner adds no allowances and cuts at full roll width, so the strip
+  length IS the requirement and there are no side offcuts to make a shortfall up from. 11.1 m of
+  strip off an 11 m roll leaves 0.1 m of floor bare, so the roll count rounds up.
+* **Rigid pack goods** (laminate, LVT, tiles). "The last 0.02 m² comes out of the offcuts" needs a
+  whole plank of the right length to exist already; 3.008 packs is four packs. A spare pack for
+  repairs is offered as a separate, optional line rather than hidden in the rounding.
+
+Every covering line reports the same three figures — what is bought, the floor area, and the waste as
+a fraction of what is bought — so a carpet line and a laminate line on one page can be compared. The
+minimum job charge is absorbed rather than printed when the shortfall is under `MINIMUM_JOB_DE_MINIMIS`
+(£5): a 20p line item with a paragraph of explanation is not something anyone sends a customer.
 
 The engine never throws and never drops a line silently. An outline that crosses itself, a doorway on
 a wall the shape no longer has, two openings overlapping on one wall, a recess deeper than the room, a
 product with no roll width, a quantity that comes out non-finite: each is reported against its room
 and left out of the quantities rather than quoted wrongly. A door between two rooms is one physical
 opening, linked explicitly by `Doorway.sharedOpeningId` and never matched on its label, so it buys one
-bar and one door easing however the two sides were named.
+bar and one door easing however the two sides were named — sized from the WIDER of the two
+measurements (a long bar cuts down; a short one cannot be stretched) and eased if EITHER side needs
+it, so pairing an opening can never delete work rather than merge it.
+
+## Offline shell
+
+`public/sw.js` is a hand-written service worker (no build plugin: the hashed asset names are not known
+when it is written) registered from `src/main.tsx` in production builds only. The rules:
+
+* **The shell — navigations and `index.html` — is network-first**, with the cache as the offline
+  fallback. This is what lets a redeployed fix reach a returning user: `index.html` names the hashed
+  bundles, so serving a cached copy for ever would pin an installed app to the build it first cached.
+  For a tool that carries prices and trade rules, that is the wrong way to fail.
+* **Everything else same-origin is cache-first**, then network, caching what comes back. Vite names
+  those files by content hash, so a cached one can never be the wrong version.
+* **`activate` deletes every cache but the current one.** The cache name carries `CACHE_VERSION`,
+  which the `sw-build-id` plugin in `vite.config.ts` rewrites at build time with a hash of the built
+  `index.html` — so each deployment gets a fresh cache and the previous one is dropped. Nothing has
+  to be bumped by hand at release time.
+
+`src/offline/sw.test.ts` loads the real file into a fake worker global and drives its `fetch` handler
+against stub caches and a stub network, so the redeploy and offline paths are covered by the suite.
+The PWA manifest ships the SVG icon plus 192/512 PNGs and a maskable variant, and `index.html` carries
+an `apple-touch-icon`, because iOS ignores SVG manifest icons — and installing on a phone is the
+normal way this tool is used.
 
 ## Extending
 

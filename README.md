@@ -56,6 +56,12 @@ src/engine/      pure TypeScript estimating engine (no DOM, fully unit tested)
   estimate.ts    project -> Estimate (roll plans, BOM, prices, summaries, warnings)
 src/store/       zustand project store with localStorage autosave
 src/ui/          React UI: rooms, stairs, floor plan tracing, materials/options, results
+src/offline/     tests for the offline shell in public/sw.js
+public/          static files copied into the build
+  sw.js          service worker: the offline shell (network-first shell, cache-first assets)
+  manifest.webmanifest  PWA manifest and icons
+  favicon.svg    the icon, plus the PNG sizes exported from it for install prompts
+scripts/         smoke.mjs — the browser smoke test that drives the built app
 docs/            design notes and the domain reference behind the defaults
 ```
 
@@ -65,5 +71,13 @@ trade rules and sources behind every default.
 ## Hosting
 
 `npm run build` produces a static site. The included GitHub Actions workflow builds and tests on
-every push and can publish to GitHub Pages from `main` (enable Pages → Source: GitHub Actions).
-Any static host (Netlify, Cloudflare Pages, S3) works the same way.
+every push, and publishes to GitHub Pages when the repository's **default branch** is pushed —
+whatever that branch is called (enable Pages → Source: GitHub Actions). Any static host (Netlify,
+Cloudflare Pages, S3) works the same way.
+
+The build has no source maps, so what is published is the app and nothing else. A returning user
+picks up a new deployment on the next online load: the service worker serves the shell network-first
+and only the content-hashed assets from the cache, and each build gets its own cache name (see
+"Offline shell" in `docs/DESIGN.md`).
+
+Licensed under the MIT licence (see `LICENSE`).

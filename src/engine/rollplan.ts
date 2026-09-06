@@ -5,7 +5,7 @@
 import type { Mm, Id, CutPiece, RollPlan, Warning, Seam, BroadloomProduct, BroadloomPlanningOptions, Polygon, Doorway } from './types';
 import { planRoom, seamPenaltyMm2, type RoomPlan } from './broadloom';
 import { VINYL_ALLOWS_CROSS_JOINS } from './defaults';
-import { packOnRoll, splitIntoRolls } from './packer';
+import { packOnRoll, splitIntoRolls, rejectWarning } from './packer';
 import { polygonAreaMm2 } from './geometry';
 import { mm2ToM2 } from './units';
 
@@ -82,7 +82,22 @@ export function buildRollPlan(input: RollPlanInput): RollPlan {
   // Pile direction is chosen for the ROLL, not the room: a room planned alone may pick the
   // direction that packs worst beside its neighbours. Start from each room's own best, then flip
   // one room at a time while the packed total (plus a seam penalty) keeps falling.
-  const chosen = chooseDirections(input.rooms, input.product, rollWidth, extras, input.options, optionsByOwner);
+  const gainedSeams: DirectionChange[] = [];
+  const chosen = chooseDirections(input.rooms, input.product, rollWidth, extras, input.options, optionsByOwner, gainedSeams);
+  // Turning a room to suit the rest of the roll can buy a seam the room would not need on its own.
+  // That is usually the right trade, but it is the estimator's trade to make, not a silent one.
+  for (const change of gainedSeams) {
+    warnings.push({
+      level: 'info',
+      code: 'ROLL_SEAM_TRADE',
+      message: `${change.roomName}: planned with the rest of this roll it takes ${change.seamsAfter} seam${
+        change.seamsAfter === 1 ? '' : 's'
+      } where the room on its own needs ${change.seamsBefore}. The whole roll comes to ${(change.savingMm / 1000).toFixed(1)} m (${change.savingM2.toFixed(
+        2,
+      )} m²) less than planning every room on its own. Pin the room's pile direction or set it to 'fewest seams' to keep it in one piece.`,
+      subjectId: change.roomId,
+    });
+  }
   for (const plan of chosen) {
     directions[plan.roomId] = plan.plan.pileDirection;
     seamsByRoom[plan.roomId] = [...plan.plan.seams];
@@ -92,7 +107,20 @@ export function buildRollPlan(input: RollPlanInput): RollPlan {
 
   // Cross joins: for 'min_waste' / 'balanced', split narrow fills into k side-by-side segments when
   // that shortens the packed roll length. Never for sheet vinyl (see applyCrossJoins).
-  const finalPieces = applyCrossJoins(pieces, rollWidth, input.options, seamsByRoom, optionsByOwner, input.product);
+  const splits: CrossJoinSplit[] = [];
+  const finalPieces = applyCrossJoins(pieces, rollWidth, input.options, seamsByRoom, optionsByOwner, input.product, splits);
+  // A cross join is a butt joint across the floor, not a side seam: say so, on the room, with what
+  // it bought. Nothing else on the quote distinguishes a three-piece fill from a whole one.
+  for (const split of splits) {
+    warnings.push({
+      level: 'info',
+      code: 'CROSS_JOIN',
+      message: `${split.ownerName}: the ${(split.width / 1000).toFixed(2)} m fill is cut as ${split.joins + 1} pieces butt-joined end to end (${split.joins} cross join${
+        split.joins === 1 ? '' : 's'
+      }), saving ${split.savingM2.toFixed(2)} m² of ${input.product.name}. A butt joint runs across the room, not along it; set the room to 'fewest seams' or price a wider roll if that will not do.`,
+      subjectId: split.ownerId,
+    });
+  }
 
   const packed = packOnRoll({ rollWidth, pieces: finalPieces, usableOffcutMin: input.options.usableOffcutMin });
   for (const r of packed.rejected) {
@@ -101,11 +129,16 @@ export function buildRollPlan(input: RollPlanInput): RollPlan {
   warnings.push(...pileDirectionWarnings(input.rooms, directions, input.product));
   if (input.product.kind === 'sheet_vinyl') {
     const seamCount = Object.values(seamsByRoom).reduce((s, list) => s + list.length, 0);
-    if (seamCount > 1) {
+    // The FIRST seam is the one worth avoiding: it is the one that forces cold welding and a fully
+    // bonded floor. Waiting for a second one hides exactly the case a wider roll would remove.
+    if (seamCount >= 1) {
+      const alternatives = (input.product.alternativeRollWidths ?? []).filter((w) => w > rollWidth);
       warnings.push({
         level: 'warning',
-        code: 'VINYL_MULTIPLE_SEAMS',
-        message: `${input.product.name}: ${seamCount} seams are planned in this sheet vinyl. Every seam has to be welded and is a route for water — compare a wider roll before ordering.`,
+        code: 'VINYL_SEAM',
+        message: `${input.product.name}: ${seamCount} seam${seamCount === 1 ? ' is' : 's are'} planned in this sheet vinyl. Every seam has to be cold-welded, forces a fully bonded floor and is a route for water${
+          alternatives.length > 0 ? ` — compare the ${alternatives.map((w) => `${(w / 1000).toFixed(1)} m`).join(' / ')} roll before ordering.` : ' — compare a wider roll before ordering.'
+        }`,
       });
     }
   }
@@ -140,45 +173,104 @@ export function buildRollPlan(input: RollPlanInput): RollPlan {
   };
 }
 
-/** A piece the packer refused, with a message that says WHY it was refused. */
-function rejectWarning(r: CutPiece, rollWidth: Mm): Warning {
-  const tooWide = r.width > rollWidth + 1e-6;
-  const message = tooWide
-    ? `${r.ownerName}: piece "${r.label}" (${(r.width / 1000).toFixed(2)} m) is wider than the ${(rollWidth / 1000).toFixed(2)} m roll.`
-    : `${r.ownerName}: piece "${r.label}" has no usable size (${r.length} x ${r.width} mm) — check the room's dimensions and allowances.`;
-  return { level: 'error', code: tooWide ? 'PIECE_TOO_WIDE' : 'PIECE_NOT_MEASURABLE', message, subjectId: r.ownerId };
+/**
+ * Groups of rooms that are one continuous run of carpet: rooms joined to each other through an
+ * opening (`sharedOpeningId`) that at least one side marks `continuous`. Two bedrooms that each have
+ * a continuous opening into a DIFFERENT room are not on the same run and must not be grouped — the
+ * carpet never crosses between them, so their pile directions are free to differ.
+ */
+function continuousRuns(rooms: RollPlanRoom[]): RollPlanRoom[][] {
+  const byOpening = new Map<Id, { continuous: boolean; rooms: RollPlanRoom[] }>();
+  for (const room of rooms) {
+    for (const d of room.doorways ?? []) {
+      const openingId = d.sharedOpeningId?.trim();
+      if (!openingId) continue; // an unpaired doorway names no room on the other side
+      const entry = byOpening.get(openingId) ?? { continuous: false, rooms: [] };
+      if (d.continuous) entry.continuous = true;
+      if (!entry.rooms.includes(room)) entry.rooms.push(room);
+      byOpening.set(openingId, entry);
+    }
+  }
+  // Union the rooms of every continuous opening: a hall continuous into two rooms is one run of three.
+  const parent = new Map<Id, Id>(rooms.map((r) => [r.roomId, r.roomId]));
+  const find = (id: Id): Id => {
+    let cur = id;
+    while (parent.get(cur) !== cur) cur = parent.get(cur)!;
+    return cur;
+  };
+  let anyJoin = false;
+  for (const entry of byOpening.values()) {
+    if (!entry.continuous || entry.rooms.length < 2) continue;
+    anyJoin = true;
+    const root = find(entry.rooms[0]!.roomId);
+    for (const r of entry.rooms.slice(1)) parent.set(find(r.roomId), root);
+  }
+  if (!anyJoin) return [];
+  const groups = new Map<Id, RollPlanRoom[]>();
+  for (const room of rooms) {
+    const root = find(room.roomId);
+    const list = groups.get(root) ?? [];
+    list.push(room);
+    groups.set(root, list);
+  }
+  return [...groups.values()].filter((g) => g.length > 1);
 }
 
 /**
  * Rooms that must show the same pile direction, and do not.
  *
  * On a hall / stairs / landing the pile has to run the same way throughout or the shading makes it
- * look like two different carpets. Rooms joined by a `continuous` doorway are one run of carpet, and
- * a staircase always runs its pile down the flight, so its rooms should follow.
+ * look like two different carpets. Rooms joined TO EACH OTHER by a `continuous` opening are one run
+ * of carpet; one warning is emitted per run whose rooms disagree.
  */
 function pileDirectionWarnings(
   rooms: RollPlanRoom[],
   directions: Record<Id, 'along_length' | 'along_width'>,
   product: BroadloomProduct,
 ): Warning[] {
-  const joined = rooms.filter((r) => (r.doorways ?? []).some((d) => d.continuous));
-  const dirs = new Set(joined.map((r) => directions[r.roomId]).filter((d): d is 'along_length' | 'along_width' => d !== undefined));
-  if (joined.length < 2 || dirs.size < 2) return [];
   const label = (id: Id) => (directions[id] === 'along_length' ? 'along the length' : 'across the width');
-  return [
-    {
+  const out: Warning[] = [];
+  for (const run of continuousRuns(rooms)) {
+    const dirs = new Set(run.map((r) => directions[r.roomId]).filter((d): d is 'along_length' | 'along_width' => d !== undefined));
+    if (dirs.size < 2) continue;
+    out.push({
       level: 'info',
       code: 'PILE_DIRECTION_SPLIT',
-      message: `${product.name}: ${joined
+      message: `${product.name}: ${run
         .map((r) => `${r.roomName} runs ${label(r.roomId)}`)
-        .join(', ')} — these are joined by an opening where the carpet is continuous, so the pile should run the same way in both or the shading will show. Pin the direction on each room to force it.`,
-    },
-  ];
+        .join(', ')} — these are joined by an opening where the carpet is continuous, so the pile should run the same way through it or the shading will show. Pin the direction on each room to force it.`,
+    });
+  }
+  return out;
 }
 
 interface ChosenRoomPlan {
   roomId: Id;
   plan: RoomPlan;
+}
+
+/** A fill the cross-join pass split, for the warning that discloses it. */
+export interface CrossJoinSplit {
+  ownerId: Id;
+  ownerName: string;
+  label: string;
+  /** Width of the fill (mm) — the strip that ends up butt-joined. */
+  width: Mm;
+  /** Number of butt joints (segments - 1). */
+  joins: number;
+  /** Carpet saved by the split (m²). */
+  savingM2: number;
+}
+
+/** A room the whole-roll pass turned, gaining a seam it would not have on its own. */
+export interface DirectionChange {
+  roomId: Id;
+  roomName: string;
+  seamsBefore: number;
+  seamsAfter: number;
+  /** Roll length saved across the whole roll (mm) and the carpet that is (m²). */
+  savingMm: Mm;
+  savingM2: number;
 }
 
 /** Every direction worth planning a room in. */
@@ -233,6 +325,8 @@ export function chooseDirections(
   extras: CutPiece[],
   options: BroadloomPlanningOptions,
   optionsByOwner: Record<Id, BroadloomPlanningOptions>,
+  /** Filled with the rooms the whole-roll pass gave an extra seam, so the caller can disclose it. */
+  report?: DirectionChange[],
 ): ChosenRoomPlan[] {
   const candidates = rooms.map((room) => {
     const plans: RoomPlan[] = [];
@@ -264,6 +358,7 @@ export function chooseDirections(
   });
 
   // Improvement pass over the whole roll.
+  const solo = [...chosen];
   if (candidates.some((c) => c.plans.length > 1)) {
     let current = scorePlans(chosen, extras, rollWidth, options, optionsByOwner, product);
     for (let pass = 0; pass < DIRECTION_PASSES; pass++) {
@@ -287,7 +382,44 @@ export function chooseDirections(
     }
   }
 
+  if (report && chosen.some((plan, i) => plan !== solo[i])) {
+    const soloLength = packedLength(solo, extras, rollWidth, options, optionsByOwner, product);
+    const finalLength = packedLength(chosen, extras, rollWidth, options, optionsByOwner, product);
+    const savingMm = Math.max(0, soloLength - finalLength);
+    for (let i = 0; i < candidates.length; i++) {
+      const before = solo[i]!.seams.length;
+      const after = chosen[i]!.seams.length;
+      if (chosen[i] === solo[i] || after <= before) continue;
+      report.push({
+        roomId: candidates[i]!.room.roomId,
+        roomName: candidates[i]!.room.roomName,
+        seamsBefore: before,
+        seamsAfter: after,
+        savingMm,
+        savingM2: mm2ToM2(savingMm * rollWidth),
+      });
+    }
+  }
+
   return candidates.map(({ room }, i) => ({ roomId: room.roomId, plan: chosen[i]! }));
+}
+
+/** Roll length (mm) a set of room plans actually packs into, cross joins included (no seam penalty). */
+function packedLength(
+  plans: RoomPlan[],
+  extras: CutPiece[],
+  rollWidth: Mm,
+  options: BroadloomPlanningOptions,
+  optionsByOwner: Record<Id, BroadloomPlanningOptions>,
+  product: BroadloomProduct,
+): Mm {
+  const seams: Record<Id, Seam[]> = {};
+  for (const p of plans) {
+    const ownerId = p.pieces[0]?.ownerId;
+    if (ownerId !== undefined) seams[ownerId] = [...p.seams];
+  }
+  const joined = applyCrossJoins([...plans.flatMap((p) => p.pieces), ...extras], rollWidth, options, seams, optionsByOwner, product);
+  return packOnRoll({ rollWidth, pieces: joined, usableOffcutMin: options.usableOffcutMin }).totalLength;
 }
 
 /** Plan a room in both pile directions when 'auto', keeping the cheaper (the room on its own). */
@@ -306,6 +438,8 @@ export function applyCrossJoins(
   seamsByRoom: Record<Id, Seam[]>,
   optionsByOwner: Record<Id, BroadloomPlanningOptions> = {},
   product?: Pick<BroadloomProduct, 'kind'>,
+  /** Filled with every split that was accepted, so the caller can put it on the quote. */
+  report?: CrossJoinSplit[],
 ): CutPiece[] {
   let current = [...pieces];
   // Sheet vinyl is never cross-joined. A butt join across a kitchen or bathroom floor is a route for
@@ -348,6 +482,14 @@ export function applyCrossJoins(
     }
     if (bestK > 1) {
       current = bestPieces;
+      report?.push({
+        ownerId: fill.ownerId,
+        ownerName: fill.ownerName,
+        label: fill.label,
+        width: fill.width,
+        joins: bestK - 1,
+        savingM2: mm2ToM2((base - bestLen) * rollWidth),
+      });
       // record cross seams for the diagram
       if (fill.placement) {
         const poly = fill.placement.polygon;

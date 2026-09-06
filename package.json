@@ -11,8 +11,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src --ext .ts,.tsx"
+    "smoke": "node scripts/smoke.mjs"
   },
+  "license": "MIT",
   "engines": {
     "node": ">=20"
   },

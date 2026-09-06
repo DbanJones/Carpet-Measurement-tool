@@ -55,12 +55,13 @@ cheapest planned on its own, then the whole roll is re-packed while turning one 
 as long as the combined length keeps falling. A landing that packs beside the hall one way and opens
 a whole new cut the other is worth 2 m of carpet, and no per-room decision can see that. **[U]**
 
-**Over-runs.** Whole units — packs of laminate, rolls of underlay, packs of gripper, lengths of
-beading — round UP, except when the requirement overruns the last unit by less than
-`OVER_RUN_TOLERANCE` (3%, `src/engine/accessories.ts`). 4.02 rolls of underlay is four rolls and
-0.22 m made up out of the offcuts, not a whole fifth 15 m² roll to supply 219 mm; 3.008 packs of
-laminate is three packs, not four (which would be 42% more material than the floor). The quote says
-in the line note exactly how much is being made up. **[L]**
+**Over-runs.** Whole units round UP. The one exception is goods that carry their own cutting
+allowance and leave usable offcuts — packs of gripper, lengths of beading, rolls of floating-floor
+foam: those may round DOWN when the requirement overruns the last unit by less than
+`OVER_RUN_TOLERANCE` (3%, `src/engine/accessories.ts`), and the line note says exactly how much is
+being made up. 4.02 packs is four packs plus a bit out of the offcuts, not a fifth pack bought to
+supply half a length. Carpet underlay (no allowance, no offcuts — section 4) and rigid pack goods
+(a plank is a plank — section 7) are outside the tolerance and always round up. **[L]**
 
 Measure at the **longest and widest points**, into bays, alcoves and doorways (to the centre of the
 closed door), and ignore chimney breasts and other obstructions — the fitter cuts around them. The
@@ -129,7 +130,9 @@ runs. A three-winder corner uses about 1.8× the carpet of three straight steps.
 Underlay is planned as **1.37 m strips**, not by area, because the width never divides into a room
 neatly: a 4.0 m wide room needs three strips = 4.11 m of underlay width. Strips run at 90° to the
 carpet seams, are butt-joined and taped. The same strip planner as the carpet is used, with no
-allowances, so offcuts from one room serve the next.
+allowances, so offcuts from one room serve the next. Because nothing is added and the strips are cut
+at full roll width, the roll count rounds UP: 11.1 m of strip off an 11 m roll is two rolls, not one
+and a promise. (See section 9 — this is the one place the 3% over-run tolerance does not apply.)
 
 ## 5. Gripper, door bars and tapes
 
@@ -144,8 +147,13 @@ allowances, so offcuts from one room serve the next.
 | `doubleSidedTapeRollLength` | 25 m | 50 mm double-sided tape for perimeter-fixed vinyl. **[V]** |
 
 Gripper goes round the room's perimeter **less the door openings**, with timber pins on boards and
-masonry pins on concrete, anhydrite, tiles or asphalt. Sheet vinyl and hard floors take none. Sound
-existing gripper can often be reused — the tool says so rather than silently charging for new.
+masonry pins on concrete, anhydrite, tiles or asphalt. Sheet vinyl and hard floors take none.
+
+Sound existing gripper can often be reused, but a quote cannot have it both ways: new gripper cannot
+be nailed down on top of the old. The tool orders new gripper for every carpet room, so lifting the
+old gripper is *required* work in the totals, and the note on the room offers the other route (reuse
+it, and take both lines off). Left as a "recommended, excluded" line beside a full order of new
+gripper it was a job nobody had priced.
 
 Door bar type comes from the transition, not from a menu: carpet→carpet takes a double-sided bar,
 carpet→hard floor a single-edge, hard→same-level-hard a T-bar, hard→different height a ramp, and a
@@ -154,7 +162,10 @@ floor running out to a doorstep an end profile.
 A door between two rooms is measured from **both** of them — each room's gripper has to stop at it —
 but there is one leaf and one bar to buy. The two entries are joined by an explicit
 `Doorway.sharedOpeningId` (the "Shared with" column in the doorway editor), and the opening is then
-counted once for the bar AND once for the door easing. Identity is never guessed from the label:
+counted once for the bar AND once for the door easing — and the one leaf is credited to a side whose
+rules call for easing, so pairing an opening merges a double count instead of dropping the work.
+An external door is eased like any other: a UK front door normally swings inward over the new floor.
+Identity is never guessed from the label:
 "Door", "Doorway" and "Door to landing" are exactly what people type, so matching on text would buy
 one bar for two different doorways in different rooms — a bar short on site — or two bars for one
 opening described differently from each side. Where the two sides were measured at different widths
@@ -182,6 +193,11 @@ concrete under a resilient or floating floor gets a moisture test and a provisio
 Quantities are summed across rooms **before** rounding, so a project buys bags, not rooms.
 Recommended (as opposed to required) work is priced in the notes but kept out of the totals.
 
+A **staircase** goes through the same table, restricted to the work that can physically happen on a
+flight (`STAIR_PREP_KINDS`: uplift, disposal, gripper removal, securing a squeaking tread). The rest
+of the table is measured over a floor area a staircase does not have — you cannot pour levelling
+compound down a flight or lay a 2440 x 1220 sheet of ply on it.
+
 ## 7. Hard flooring
 
 | Constant | Value | Rule |
@@ -195,6 +211,8 @@ Recommended (as opposed to required) work is priced in the notes but kept out of
 | `CARPET_TILE_SIZE` / per box / wastage | 500 mm / 20 (5 m²) / 7% | Standard tile and box; 5% in simple rectangles, 10% for angled rooms or directional lay. **[V]** |
 | `TACKIFIER_M2_PER_LITRE` / tub | 7 m²/L / 5 L | Rollered tackifier covers 6–10 m²/L. **[V]** |
 | Acclimatisation | 48 h | Laminate 48 h, engineered 72 h, LVT and carpet 24 h, unopened in the room. **[V]** |
+| `HARD_FLOOR_UNDERLAY_WASTAGE` | 5% | Loose-laid foam / fibreboard under a floating floor is ordered by area with 5% for trimming and the lapped joins. Carpet underlay adds nothing (section 4): it is planned strip by strip. **[U]** |
+| Pack rounding | up, always | Laminate, LVT and tiles are rigid: "the last 0.02 m² comes out of the offcuts" needs a whole plank of the right length to exist, so `OVER_RUN_TOLERANCE` does not apply to pack goods. A spare pack is offered separately for repairs. **[V]** |
 
 Sheet vinyl is **fully bonded** above about 20 m² or wherever it is seamed, and perimeter-fixed with
 double-sided tape below that; all seams are chemically sealed.
@@ -249,8 +267,11 @@ software. The ones that change a number are resolved as follows.
   mid-point (4.3 m² at 3 mm).
 - **Ply fixings.** 150 per sheet at 150 mm centres both ways, rather than 120 at 200 mm field
   spacing.
-- **Underlay wastage.** None added — the engine plans the actual 1.37 m strips and pools offcuts,
-  which is more accurate than the retailers' flat 5%.
+- **Carpet underlay wastage.** None added — the engine plans the actual 1.37 m strips and pools
+  offcuts, which is more accurate than the retailers' flat 5%. Because nothing is added and the
+  strips are cut at full roll width, there are no offcuts to make a shortfall up from either, so the
+  roll count rounds UP with no over-run tolerance. Floating-floor underlay is different: it is
+  ordered by area with `HARD_FLOOR_UNDERLAY_WASTAGE` (5%) for trimming and joins.
 - **Loose-lay vinyl threshold.** Sources give 12 m² and 25 m²; the tool bonds at 20 m² or at the
   first seam, whichever comes first.
 - **Gripper price.** £1.20 per length (retail pack) is the default; a trade box works out at £0.60.
@@ -305,10 +326,29 @@ Values as shipped in `src/engine/defaults.ts`. All of them are editable in the a
 | `PLY_SCREWS_PER_BOX` | 200 |
 | `CARPET_PRICE_TIERS` | budget £8, mid £18, premium £35 per m² |
 
-Two more supply rules live beside the code that uses them rather than in `defaults.ts`:
-`OVER_RUN_TOLERANCE` (0.03) and `UNDERLAY_PAD_WASTAGE` (0.10) in `src/engine/accessories.ts`,
-`STAIR_HARD_FLOOR_WASTAGE` (0.15) in `src/engine/stairs.ts`, and
-`VINYL_FULLY_BONDED_MIN_AREA_M2` (20 m²) in `src/engine/estimate.ts`.
+Some supply rules live beside the code that uses them rather than in `defaults.ts`. They are all
+exported, and this is the full list:
+
+| Constant | Value | Where |
+|---|---|---|
+| `OVER_RUN_TOLERANCE` | 0.03 | `accessories.ts` — continuous goods only (gripper packs, beading, foam underlay); never carpet underlay or rigid packs |
+| `UNDERLAY_PAD_WASTAGE` | 0.10 | `accessories.ts` — stair pads cut from the roll |
+| `MAX_UNDERLAY_TOG_WITH_UFH` | 1.0 tog | `accessories.ts` |
+| `PATIO_DOOR_MIN_WIDTH` | 1200 mm | `accessories.ts` |
+| `CROSS_JOIN_ALLOWANCE` / `DIRECTION_PASSES` | 50 mm / 3 | `rollplan.ts` |
+| `LARGE_ROOM_AREA_M2` / `LARGE_ROOM_EXTRA_WASTAGE` | 40 m² / 0.02 | `hardfloor.ts` |
+| `NON_RECTILINEAR_EXTRA_WASTAGE` | 0.03 | `hardfloor.ts` |
+| `HARD_FLOOR_UNDERLAY_WASTAGE` | 0.05 | `hardfloor.ts` — floating-floor foam / fibreboard: trimming and joins |
+| `MIN_LAST_ROW_FRACTION` | 1/3 | `hardfloor.ts` |
+| `EXPANSION_JOINT_MAX_RUN` | 8 / 8 / 10 m | `hardfloor.ts` |
+| `STAIR_HARD_FLOOR_WASTAGE` | 0.15 | `stairs.ts` |
+| `DEFAULT_BULLNOSE_PROJECTION` / `DEFAULT_CURTAIL_PROJECTION` | 150 / 340 mm | `stairs.ts` |
+| `POOR_SUBFLOOR_MIN_LATEX_THICKNESS` / `PLY_SKIM_LATEX_THICKNESS` | 5 / 3 mm | `floorprep.ts` |
+| `MOISTURE_TESTS_PER_ROOM` | 1 | `floorprep.ts` — BS 8203: one test per room / discrete area |
+| `ACCLIMATISATION_HOURS` | 48 h | `floorprep.ts` |
+| `CLICK_FLATNESS_TOLERANCE` | 3 mm over 2 m | `floorprep.ts` |
+| `VINYL_FULLY_BONDED_MIN_AREA_M2` | 20 m² | `estimate.ts` |
+| `MINIMUM_JOB_DE_MINIMIS` | £5 | `estimate.ts` — a smaller minimum-charge shortfall is absorbed, not printed |
 
 ### `DEFAULT_BROADLOOM_OPTIONS`
 

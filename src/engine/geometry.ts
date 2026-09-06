@@ -126,6 +126,51 @@ export function applyWallFeatures(length: Mm, width: Mm, features: WallFeature[]
 }
 
 /**
+ * The rectangle a RECESS (negative depth) cuts out of the room, in room coordinates, or null for a
+ * projection / zero-size feature. Mirrors the walk in `applyWallFeatures` exactly.
+ */
+function recessRect(length: Mm, width: Mm, f: WallFeature): { x0: Mm; x1: Mm; y0: Mm; y1: Mm } | null {
+  if (!(f.width > 0) || !(f.depth < 0)) return null;
+  const wallLen = f.wall === 'top' || f.wall === 'bottom' ? length : width;
+  const depth = Math.min(-f.depth, f.wall === 'top' || f.wall === 'bottom' ? width : length);
+  const s = Math.max(0, Math.min(f.offset, wallLen));
+  const e = Math.min(s + f.width, wallLen);
+  if (e - s <= EPS || depth <= EPS) return null;
+  switch (f.wall) {
+    case 'top':
+      return { x0: s, x1: e, y0: 0, y1: depth };
+    case 'bottom':
+      return { x0: length - e, x1: length - s, y0: width - depth, y1: width };
+    case 'right':
+      return { x0: length - depth, x1: length, y0: s, y1: e };
+    case 'left':
+      return { x0: 0, x1: depth, y0: width - e, y1: width - s };
+  }
+}
+
+/**
+ * Pairs of recesses that eat into the same piece of the room (typically two recesses meeting in a
+ * corner). `applyWallFeatures` clamps a recess against the OPPOSITE wall but not against another
+ * recess, so an overlapping pair walks the boundary back over itself and the outline comes out
+ * self-intersecting. Naming the two features is what lets the user fix it.
+ */
+export function overlappingFeatures(length: Mm, width: Mm, features: WallFeature[]): [WallFeature, WallFeature][] {
+  const rects = features.map((f) => ({ f, r: recessRect(length, width, f) }));
+  const out: [WallFeature, WallFeature][] = [];
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      const a = rects[i]!.r;
+      const b = rects[j]!.r;
+      if (!a || !b) continue;
+      const overlapX = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+      const overlapY = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+      if (overlapX > EPS && overlapY > EPS) out.push([rects[i]!.f, rects[j]!.f]);
+    }
+  }
+  return out;
+}
+
+/**
  * Build a rectilinear polygon by "walking the walls": start at the origin heading +x, and for each
  * segment turn left/right/straight then advance. Useful for typing odd-shaped rooms wall by wall.
  * The last segment need not close the polygon; the closing edge is implied.
