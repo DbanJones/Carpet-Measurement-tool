@@ -1,7 +1,13 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { parseLength, fromMm, formatFtIn, roundTo, MM_PER_M } from '@engine/units';
 import type { Mm } from '@engine/types';
 
+/**
+ * A labelled field for ONE control. The wrapper is a `<label>`, so clicking the caption focuses the
+ * control inside it — which is only correct when there is exactly one. For a row of checkboxes,
+ * radio buttons or action buttons use `FieldGroup`: a `<label>` wrapping several labelable elements
+ * activates the FIRST one, so clicking the caption would silently tick a box or press a button.
+ */
 export function Field({ label, hint, children, inline }: { label: ReactNode; hint?: ReactNode; children: ReactNode; inline?: boolean }) {
   return (
     <label className={inline ? 'field field-inline' : 'field'}>
@@ -9,6 +15,24 @@ export function Field({ label, hint, children, inline }: { label: ReactNode; hin
       {children}
       {hint ? <span className="field-hint">{hint}</span> : null}
     </label>
+  );
+}
+
+/**
+ * A captioned GROUP of controls (checkboxes, preset buttons, radio buttons). Renders a plain
+ * container with a `role="group"` named by the caption, so the caption is announced with each
+ * control but clicking it does nothing.
+ */
+export function FieldGroup({ label, hint, children, inline }: { label: string; hint?: ReactNode; children: ReactNode; inline?: boolean }) {
+  const id = useId();
+  return (
+    <div className={inline ? 'field field-inline' : 'field'} role="group" aria-labelledby={id}>
+      <span className="field-label" id={id}>
+        {label}
+      </span>
+      {children}
+      {hint ? <span className="field-hint">{hint}</span> : null}
+    </div>
   );
 }
 
@@ -38,19 +62,31 @@ export function LengthInput({
   const display = (mm: Mm | undefined) =>
     mm === undefined || Number.isNaN(mm) ? '' : unit === 'metric' ? String(roundTo(fromMm(mm, 'm'), 3)) : formatFtIn(mm);
   const [text, setText] = useState(display(value));
-  const [invalid, setInvalid] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const errorId = useId();
   useEffect(() => {
     setText(display(value));
-    setInvalid(false);
+    setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, unit]);
   const commit = () => {
-    const mm = parseLength(text, unit === 'metric' ? 'm' : 'ft');
-    if (mm === null || mm < min) {
-      setInvalid(true);
+    // Reading a field must never change the measurement. Feet-and-inches display rounds to the whole
+    // inch, so re-parsing an untouched field would write 3988 mm back over a stored 4000 mm every
+    // time the user tabbed through it. Nothing typed, nothing committed.
+    if (text === display(value)) {
+      setError(null);
       return;
     }
-    setInvalid(false);
+    const mm = parseLength(text, unit === 'metric' ? 'm' : 'ft');
+    if (mm === null) {
+      setError(unit === 'metric' ? `Enter a length like 4.2, 420cm or 13' 9"` : `Enter a length like 13' 9", 13ft 9in or 4.2m`);
+      return;
+    }
+    if (mm < min) {
+      setError(`Must be at least ${unit === 'metric' ? `${roundTo(fromMm(min, 'm'), 3)} m` : formatFtIn(min)}.`);
+      return;
+    }
+    setError(null);
     onChange(Math.round(mm));
     setText(display(Math.round(mm)));
   };
@@ -60,8 +96,9 @@ export function LengthInput({
         type="text"
         inputMode="decimal"
         aria-label={ariaLabel}
-        aria-invalid={invalid}
-        className={invalid ? 'invalid' : ''}
+        aria-invalid={error !== null}
+        aria-describedby={error ? errorId : undefined}
+        className={error ? 'invalid' : ''}
         value={text}
         placeholder={placeholder ?? (unit === 'metric' ? '0.00' : `0' 0"`)}
         disabled={disabled}
@@ -72,6 +109,11 @@ export function LengthInput({
         }}
       />
       <span className="unit">{unit === 'metric' ? 'm' : 'ft in'}</span>
+      {error ? (
+        <span className="field-hint invalid" role="alert" id={errorId}>
+          {error}
+        </span>
+      ) : null}
     </span>
   );
 }

@@ -30,8 +30,10 @@ export interface PackResult {
 export function packOnRoll(input: PackInput): PackResult {
   const { rollWidth } = input;
   const rejected: CutPiece[] = [];
+  // `!(x > 0)` also rejects NaN: a piece whose length came out non-finite (a broken allowance) must
+  // not be silently packed as a zero-length shelf and disappear from the order.
   const pieces = input.pieces.filter((p) => {
-    if (p.width > rollWidth + 1e-6 || p.length <= 0 || p.width <= 0) {
+    if (p.width > rollWidth + 1e-6 || !(p.length > 0) || !(p.width > 0)) {
       rejected.push(p);
       return false;
     }

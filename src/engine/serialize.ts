@@ -794,6 +794,7 @@ function repairDoorways(raw: unknown, what: string, log: WarningLog): Doorway[] 
       transition: enumOr(e.transition, DOORWAY_TRANSITIONS, 'carpet', `${label}: what is on the other side`, log),
     };
     setIf(doorway, 'continuous', optionalBoolean(e.continuous, `${label}: the "carpet runs through" flag`, log));
+    setIf(doorway, 'sharedOpeningId', optionalString(e.sharedOpeningId, `${label}: the shared opening it belongs to`, log));
     setIf(doorway, 'label', optionalString(e.label, `${label}: the label`, log));
     return doorway;
   });
@@ -926,6 +927,7 @@ function repairStaircases(raw: unknown, ctx: RefCtx): Staircase[] {
     }
     setIf(staircase, 'nosingOverhang', optionalNumber(e.nosingOverhang, NON_NEGATIVE, `${what}: the nosing overhang`, ctx.log));
     setIf(staircase, 'topRiserByLanding', optionalBoolean(e.topRiserByLanding, `${what}: the "landing covers the top riser" flag`, ctx.log));
+    setIf(staircase, 'underlayRisers', optionalBoolean(e.underlayRisers, `${what}: the "underlay the risers too" flag`, ctx.log));
     if (e.subfloor !== undefined && e.subfloor !== null) staircase.subfloor = repairSubfloor(e.subfloor, what, ctx.log);
     setIf(staircase, 'notes', optionalString(e.notes, `${what}: the notes`, ctx.log));
     return staircase;
@@ -1027,6 +1029,11 @@ function repairProject(body: Record<string, unknown>, log: WarningLog): Project 
     options: repairOptions(body.options, log),
     prices: repairPrices(body.prices, log),
   };
+  setIf(project, 'customer', optionalString(body.customer, 'The customer', log));
+  setIf(project, 'siteAddress', optionalString(body.siteAddress, 'The site address', log));
+  setIf(project, 'quoteRef', optionalString(body.quoteRef, 'The quote reference', log));
+  setIf(project, 'quoteDate', optionalString(body.quoteDate, 'The quote date', log));
+  setIf(project, 'validFor', optionalString(body.validFor, 'How long the quote is valid', log));
   setIf(project, 'notes', optionalString(body.notes, 'The project notes', log));
   return project;
 }

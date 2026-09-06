@@ -95,7 +95,13 @@ describe('StairsEditor', () => {
     expect(screen.getByLabelText('Step 3 narrow going')).toBeTruthy();
     expect(screen.getByTestId('stairs-summary').textContent).toContain('1 winder');
 
+    // deleting a step discards its measured rise, going and width, so it asks first
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     fireEvent.click(screen.getByLabelText('Delete step 1'));
+    expect(stairs(id).steps.length).toBe(5);
+    confirmSpy.mockReturnValue(true);
+    fireEvent.click(screen.getByLabelText('Delete step 1'));
+    confirmSpy.mockRestore();
     const deleted = stairs(id);
     expect(deleted.steps.length).toBe(4);
     expect(deleted.steps[1]!.kind).toBe('winder');
@@ -122,7 +128,10 @@ describe('StairsEditor', () => {
     expect(stepBadge.textContent).toContain('rise');
     expect(stepBadge.textContent).toContain('going');
     expect(stepBadge.textContent).toContain('pitch');
-    expect(stepBadge.getAttribute('title')).toContain('rise 250 mm is outside 150–220 mm');
+    // the reason is IN the cell, not only in a title tooltip a touch screen never shows
+    expect(stepBadge.closest('td')!.textContent).toContain('rise 250 mm is outside 150–220 mm');
+    // and the pitch figure itself carries a marker, not just a colour
+    expect(container.querySelector('.stairs-pitch-warn')!.textContent).toContain('⚠');
     expect(screen.getByText(/Pitch 50\.0° — steeper than 42°/)).toBeTruthy();
 
     // fix the rise: going (210 < 220) and pitch (200/210 = 43.6°) remain flagged
@@ -130,6 +139,7 @@ describe('StairsEditor', () => {
     expect(stairs(id).steps[0]!.rise).toBe(200);
     expect(container.querySelectorAll('.badge.warn').length).toBe(4);
     expect(container.querySelectorAll('.badge.warn')[1]!.textContent).toBe('⚠ going, pitch');
+    expect(container.querySelectorAll('.stairs-issue')[0]!.textContent).toContain('going 210 mm');
     // fix the going too: 200/230 = 41.0°, everything inside the limits
     commit(screen.getByLabelText('Going for all steps'), '0.23');
     expect(container.querySelectorAll('.badge.warn').length).toBe(0);
@@ -168,6 +178,12 @@ describe('StairsEditor', () => {
     fireEvent.click(screen.getByText('+ Add landing'));
     expect(stairs(id).landings).toHaveLength(1);
     expect(stairs(id).landings[0]).toMatchObject({ kind: 'top', length: 1000, width: 860, afterStepIndex: 4 });
+    // a SECOND landing does not stack at the head: only one landing can carry the top riser
+    fireEvent.click(screen.getByText('+ Add landing'));
+    expect(stairs(id).landings[1]).toMatchObject({ kind: 'quarter', afterStepIndex: 2 });
+    act(() => {
+      useProjectStore.getState().updateStaircase(id, (st) => ({ ...st, landings: [st.landings[0]!] }));
+    });
 
     fireEvent.change(screen.getByLabelText('Landing 1 type'), { target: { value: 'half' } });
     fireEvent.change(screen.getByLabelText('Landing 1 position'), { target: { value: '1' } });
@@ -176,7 +192,10 @@ describe('StairsEditor', () => {
     expect(l).toMatchObject({ kind: 'half', length: 1200, afterStepIndex: 1 });
     expect(screen.getByRole('img', { name: /total run incl\. landings/ })).toBeTruthy();
 
+    // a landing holds measured dimensions too, so removing it asks first
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByLabelText('Remove landing 1'));
+    confirmSpy.mockRestore();
     expect(stairs(id).landings).toHaveLength(0);
   });
 

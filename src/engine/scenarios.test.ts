@@ -26,6 +26,7 @@ import {
   CUT_INCREMENT,
   DEFAULT_PRICES,
   DEFAULT_UNDERLAY,
+  VINYL_MIN_FILL_WIDTH,
 } from './defaults';
 import type { BomLine, BroadloomProduct, Mm, PackProduct, Project, Room, Staircase, Step, Warning } from './types';
 
@@ -120,13 +121,15 @@ describe('scenario 1: one 4.2 x 3.5 m bedroom, 4 m carpet, timber floor, old car
 
   it('grips the perimeter less the doorway, plus 10 % wastage: 11 lengths', () => {
     // perimeter 2 x (4.2 + 3.5) = 15.4 m, less the 762 mm opening = 14 638 mm
-    // x 1.10 wastage = 16 101.8 -> 16 102 mm;  16 102 / 1520 = 10.59 -> 11 lengths (2 packs of 10)
+    // x 1.10 wastage = 16 101.8 -> 16 102 mm;  16 102 / 1520 = 10.59 -> 11 lengths -> 2 packs of 10
     const gripper = est.details.gripper!;
     expect(gripper.byPin.timber).toBe(16102);
     expect(gripper.byPin.concrete).toBe(0); // timber pins on floorboards
+    // gripper is bought by the pack, so that is what is quoted and priced (one basis, not two)
     const line = bomLine(est, 'gripper:timber');
-    expect(line).toMatchObject({ quantity: 11, unit: 'length', unitPrice: 1.2, total: 13.2 });
-    expect(line.notes).toContain('2 packs of 10');
+    expect(line).toMatchObject({ quantity: 2, unit: 'pack', unitPrice: DEFAULT_PRICES.materials.gripperPerPack });
+    expect(line.notes).toContain('11 lengths');
+    expect(line.notes).toContain('20 in 2 packs');
   });
 
   it('fits one double-sided carpet door bar at the 762 mm opening', () => {
@@ -147,14 +150,15 @@ describe('scenario 1: one 4.2 x 3.5 m bedroom, 4 m carpet, timber floor, old car
   });
 
   it('adds the priced lines up to the quoted total', () => {
-    // materials 309.60 + 150 + 13.20 + 8 + 5 (underlay tape)        = 485.80
-    // labour     73.50 + 29.40 + 44.10                              = 147.00
-    // subtotal 632.80; VAT at 20 % = 126.56; total 759.36
-    expect(est.totals.materialsCost).toBe(485.8);
-    expect(est.totals.labourCost).toBe(147);
-    expect(est.totals.subtotal).toBe(632.8);
-    expect(est.totals.vat).toBe(126.56);
-    expect(est.totals.total).toBe(759.36);
+    // materials 309.60 + 150 + 22 (2 gripper packs) + 8 + 5 (underlay tape) = 494.60
+    // labour     73.50 + 29.40 + 44.10 = 147.00, lifted to the 180.00 minimum for a single-room
+    //            visit (a fitter does not attend a house for one bedroom at the per-m² rate)
+    expect(est.totals.materialsCost).toBe(494.6);
+    expect(est.totals.labourCost).toBe(180);
+    expect(bomLine(est, 'labour:minimum')).toMatchObject({ quantity: 1, unit: 'each', total: 33 });
+    expect(est.totals.subtotal).toBe(674.6);
+    expect(est.totals.vat).toBe(134.92);
+    expect(est.totals.total).toBe(809.52);
     expect(est.totals.netAreaM2).toBeCloseTo(14.7, 6);
   });
 
@@ -339,10 +343,11 @@ describe('scenario 3: hall + L-shaped landing + a 13-riser stair, all one carpet
     expect(summary.stepCount).toBe(13);
     // carpet on the treads and risers = 12 x 443 x 860 + 220 x 860 = 4 760 960 mm² = 4.76096 m²
     expect(summary.carpetAreaM2).toBeCloseTo(4.76096, 6);
-    // gripper: one length on each tread and each riser = 13 x 2 x 860 = 22 360 mm, x 1.10 = 24 596
-    expect(summary.gripperLength).toBe(24596);
-    // underlay pads: 12 x (200 + 223) x 860 + 200 x 860 = 4 537 360 mm² = 4.53736 m²
-    expect(summary.underlayAreaM2).toBeCloseTo(4.53736, 6);
+    // gripper: one length on each tread and each riser, but the top step has no tread of its own —
+    // (12 x 2 + 1) x 860 = 21 500 mm, x 1.10 = 23 650
+    expect(summary.gripperLength).toBe(23650);
+    // underlay pads go on the TREADS only, wrapped 50 mm over the nose: 12 x 273 x 860 = 2.81736 m²
+    expect(summary.underlayAreaM2).toBeCloseTo(2.81736, 6);
     expect(summary.bindingLength).toBe(0); // closed strings both sides: nothing to bind
     // 13 steps of fitting at £12 a step
     expect(bomLine(est, 'labour:stairs')).toMatchObject({ quantity: 13, unit: 'step', unitPrice: 12, total: 156 });
@@ -380,13 +385,17 @@ describe('scenario 4: a 2.6 x 2.4 m box room in 8 mm laminate, straight lay', ()
   it('orders 4 packs: 6.24 m² net + 7 % straight-lay wastage over 2.22 m² packs', () => {
     // net    = 2.6 x 2.4                       = 6.24 m²
     // gross  = 6.24 x 1.07                     = 6.6768 m²   (7 % is the straight / random-stagger figure)
-    // packs  = 6.6768 / 2.22 = 3.00757...      -> 4 packs (the room is 8 mm over three packs' worth)
+    // packs  = 6.6768 / 2.22 = 3.00757...      -> 3 packs: the 0.8 % overrun is inside
+    //          OVER_RUN_TOLERANCE, so the last 0.02 m² comes out of the offcuts rather than costing
+    //          a whole fourth pack (which would be 42 % more material than the floor).
     expect(plan.netAreaM2).toBeCloseTo(6.24, 6);
     expect(plan.wastage).toBeCloseTo(0.07, 6);
     expect(plan.grossAreaM2).toBeCloseTo(6.6768, 6);
     expect(plan.exactPacks).toBeCloseTo(6.6768 / 2.22, 6);
-    expect(plan.packs).toBe(4);
-    expect(bomLine(est, 'covering:laminate-oak')).toMatchObject({ quantity: 4, unit: 'pack', unitPrice: 24, total: 96 });
+    const laminate = bomLine(est, 'covering:laminate-oak');
+    expect(laminate).toMatchObject({ quantity: 3, unit: 'pack', unitPrice: 24, total: 72 });
+    // the note says what is BOUGHT, on the same basis as a broadloom line
+    expect(laminate.notes).toContain('6.66 m² bought for 6.24 m² of floor');
   });
 
   it('takes 1 pack of floating-floor underlay', () => {
@@ -454,7 +463,7 @@ describe('scenario 5: a 2.2 x 1.9 m bathroom in glue-down LVT over floorboards',
     expect(ply).toMatchObject({ quantity: 2, unit: 'sheet', unitPrice: 20, total: 40 });
     expect(ply.exactQuantity).toBeCloseTo(1.5446, 3);
     expect(bomLine(est, 'prep:ply_screws:required:ply-fixing-screws-300-screws-boxes-of-200')).toMatchObject({ quantity: 2, unit: 'box' });
-    const latex = bomLine(est, 'prep:latex:recommended:latex-smoothing-compound-3-mm');
+    const latex = bomLine(est, 'prep:latex:recommended:latex-smoothing-compound-over-ply-overlay-3-mm');
     expect(latex).toMatchObject({ quantity: 2, unit: 'bag' });
     expect(latex.exactQuantity).toBeCloseTo(1.0611, 3);
     // a recommended line is priced in its note but kept out of the totals
@@ -518,21 +527,22 @@ describe('scenario 6: a 3.6 x 4.6 m kitchen in 3 m sheet vinyl', () => {
   const seams = plan.seamsByRoom['kitchen']!;
 
   it('needs a second drop beside the main one — one side seam', () => {
-    // The room is 3.6 m across a 3.0 m roll, so one drop cannot cover it:
-    //   main drop  4600 + 100 = 4700 long x the full 3000 roll width (3.0 m of the 3.6 m span)
-    //   second     the remaining 600 mm + 100 allowance = 700 wide
-    // A 3.6 m room on a 3 m roll = 2 drops, joined down the room: exactly one SIDE seam.
+    // Neither side of the room fits a 3 m roll, so there is a seam whichever way it runs. Laid with
+    // the sheet running across the 3.6 m, the 4.6 m span takes 3000 + 1700 of roll width in two
+    // drops 3700 long: 7.4 lm. (Along the 4.6 m it would be two 4700 drops = 9.4 lm.)
     expect(seams.filter((s) => s.kind === 'side')).toHaveLength(1);
-    expect(plan.pieces.filter((p) => p.role === 'main')).toEqual([expect.objectContaining({ length: 4700, width: 3000 })]);
-    // 'balanced' cuts the narrow second drop as 3 cross-joined segments side by side, because
-    // 3 x 700 = 2100 fits across the roll: ceil(4700 / 3) + 50 = 1617 mm each, saving 3.1 m² of vinyl.
+    // the widest drop is the main piece whichever side of the room it falls on
+    expect(plan.pieces.filter((p) => p.role === 'main')).toEqual([expect.objectContaining({ length: 3700, width: 3000, label: 'Main piece' })]);
+    // Sheet vinyl is NEVER cross-joined: a butt joint across a kitchen floor is a route for water
+    // under the sheet, and no saving buys one. The fill is one full-length drop.
     const fills = plan.pieces.filter((p) => p.role === 'fill');
-    expect(fills).toHaveLength(3);
-    expect(fills.every((p) => p.length === 1617 && p.width === 700)).toBe(true);
-    expect(seams.filter((s) => s.kind === 'cross')).toHaveLength(2);
-    // cuts: 4700 (main) + 1617 (the three segments) = 6317 -> 6400 to the 100 mm increment
-    expect(plan.orderLength).toBe(6400);
-    expect(bomLine(est, 'covering:vinyl-3m')).toMatchObject({ quantity: 6.4, unit: 'lm', unitPrice: 48, total: 307.2 });
+    expect(fills).toEqual([expect.objectContaining({ length: 3700, width: 1700 })]);
+    expect(seams.filter((s) => s.kind === 'cross')).toHaveLength(0);
+    // and no fill is planned narrower than VINYL_MIN_FILL_WIDTH
+    expect(fills.every((p) => p.width >= VINYL_MIN_FILL_WIDTH)).toBe(true);
+    // cuts: two drops of 3700 = 7400, already on the 100 mm increment
+    expect(plan.orderLength).toBe(7400);
+    expect(bomLine(est, 'covering:vinyl-3m')).toMatchObject({ quantity: 7.4, unit: 'lm', unitPrice: 48, total: 355.2 });
   });
 
   it('is fully bonded because it is seamed, and buys a tub of adhesive rather than tape', () => {
@@ -541,7 +551,9 @@ describe('scenario 6: a 3.6 x 4.6 m kitchen in 3 m sheet vinyl', () => {
     expect(plan.netAreaM2).toBeCloseTo(16.56, 6);
     expect(16.56).toBeLessThan(20);
     const fullyBonded = est.warnings.find((w) => w.code === 'VINYL_FULLY_BONDED')!;
-    expect(fullyBonded.message).toContain('3 seams');
+    expect(fullyBonded.message).toContain('1 seam');
+    // a bonded seam is not finished until it is welded
+    expect(bomLine(est, 'adhesive:vinyl_seam_weld')).toMatchObject({ quantity: 3.6, unit: 'm' });
     // adhesive = 16.56 m² / 4 m² per kg = 4.14 kg -> ceil(4.14 / 15) = 1 tub
     expect(est.details.vinylSundries['kitchen']).toMatchObject({ adhesiveKg: 4.14, adhesiveTubs: 1, doubleSidedTapeLength: 0 });
     expect(bomLine(est, 'adhesive:vinyl')).toMatchObject({ quantity: 1, unit: 'tub', unitPrice: 45, total: 45 });
@@ -695,9 +707,9 @@ describe('scenario 8: a waterfall flight with three winders at the top', () => {
       [550, 1],
     ]);
     expect(plan.orderLength).toBe(5200);
-    // gripper: the three winders take a third length each for the long back edge —
-    // (13 x 2 + 3) x 860 = 24 940 mm, x 1.10 = 27 434 mm
-    expect(est.staircases['stairs']!.gripperLength).toBe(27434);
+    // gripper: the three winders take a third length each for the long back edge, and the top step
+    // has no tread of its own — (12 x 2 + 1 + 3) x 860 = 24 080 mm, x 1.10 = 26 488 mm
+    expect(est.staircases['stairs']!.gripperLength).toBe(26488);
   });
 });
 

@@ -100,6 +100,8 @@ export function applyWallFeatures(length: Mm, width: Mm, features: WallFeature[]
   for (const w of walls) {
     const dir = { x: Math.sign(w.end.x - w.start.x), y: Math.sign(w.end.y - w.start.y) };
     const along = (d: Mm): Point => ({ x: w.start.x + dir.x * d, y: w.start.y + dir.y * d });
+    // how far a recess can reach before it breaks through the opposite wall
+    const depthLimit = w.wall === 'top' || w.wall === 'bottom' ? width : length;
     const feats = features
       .filter((f) => f.wall === w.wall && f.width > 0 && f.depth !== 0)
       .map((f) => ({ ...f, offset: Math.max(0, Math.min(f.offset, w.len)), width: f.width }))
@@ -110,7 +112,9 @@ export function applyWallFeatures(length: Mm, width: Mm, features: WallFeature[]
       const s = Math.max(f.offset, cursor);
       const e = Math.min(f.offset + f.width, w.len);
       if (e - s <= EPS) continue;
-      const d = f.depth;
+      // A recess (negative depth) deeper than the room would push the wall out through the far side
+      // and make a self-intersecting "bowtie" whose area and bounding box are both wrong; clamp it.
+      const d = Math.max(f.depth, -depthLimit);
       pts.push(along(s));
       pts.push({ x: along(s).x + w.outward.x * d, y: along(s).y + w.outward.y * d });
       pts.push({ x: along(e).x + w.outward.x * d, y: along(e).y + w.outward.y * d });
@@ -201,9 +205,23 @@ export function distance(a: Point, b: Point): Mm {
   return Math.hypot(b.x - a.x, b.y - a.y);
 }
 
+/**
+ * Wrap any edge index into `[0, poly.length)`. A negative index (the UI writes -1 for "the edge this
+ * doorway used to sit on no longer exists") must not index off the end of the array: `poly[-1]` is
+ * `undefined` and the non-null assertions downstream would throw out of the whole estimate.
+ * Callers that care whether the index was in range ask `doorwayProblem` first.
+ */
+export function normalizeEdgeIndex(poly: Polygon, edgeIndex: number): number {
+  const n = poly.length;
+  if (n <= 0) return 0;
+  const i = Number.isFinite(edgeIndex) ? Math.trunc(edgeIndex) : 0;
+  return ((i % n) + n) % n;
+}
+
 export function edgeLength(poly: Polygon, edgeIndex: number): Mm {
-  const a = poly[edgeIndex % poly.length]!;
-  const b = poly[(edgeIndex + 1) % poly.length]!;
+  const i = normalizeEdgeIndex(poly, edgeIndex);
+  const a = poly[i]!;
+  const b = poly[(i + 1) % poly.length]!;
   return distance(a, b);
 }
 
@@ -255,8 +273,9 @@ export function translate(poly: Polygon, dx: Mm, dy: Mm): Polygon {
 
 /** Point at `offset` along edge `edgeIndex` from its start vertex. */
 export function pointAlongEdge(poly: Polygon, edgeIndex: number, offset: Mm): Point {
-  const a = poly[edgeIndex % poly.length]!;
-  const b = poly[(edgeIndex + 1) % poly.length]!;
+  const i = normalizeEdgeIndex(poly, edgeIndex);
+  const a = poly[i]!;
+  const b = poly[(i + 1) % poly.length]!;
   const len = distance(a, b);
   if (len < EPS) return { ...a };
   const t = Math.max(0, Math.min(1, offset / len));
@@ -271,11 +290,109 @@ export function doorwaySegment(poly: Polygon, d: Doorway): { from: Point; to: Po
   return { from: pointAlongEdge(poly, d.edgeIndex, start), to: pointAlongEdge(poly, d.edgeIndex, end), width: end - start };
 }
 
-/** Perimeter that needs gripper / beading: total perimeter minus the doorway openings. */
+/**
+ * What is wrong with a doorway's position on this outline, or null when it is fine.
+ * - `no_such_edge`: the edge index is negative, fractional or past the last edge — the outline has
+ *   been changed (an L-shape converted to a rectangle) since the doorway was entered. Wrapping it
+ *   silently would reattach the opening to a different wall.
+ * - `past_edge_end`: the opening starts at or beyond the end of its wall, so none of it is on the
+ *   wall at all.
+ */
+export type DoorwayProblem = 'no_such_edge' | 'past_edge_end';
+
+export function doorwayProblem(poly: Polygon, d: Doorway): DoorwayProblem | null {
+  if (poly.length < 3) return 'no_such_edge';
+  if (!Number.isFinite(d.edgeIndex) || !Number.isInteger(d.edgeIndex) || d.edgeIndex < 0 || d.edgeIndex >= poly.length) return 'no_such_edge';
+  if (!(d.width > 0)) return null; // a zero-width opening simply deducts nothing
+  const len = edgeLength(poly, d.edgeIndex);
+  if (!(d.offset < len - EPS)) return 'past_edge_end';
+  return null;
+}
+
+/**
+ * Wall length taken up by the openings, with openings that overlap on the SAME edge merged first.
+ * Two 900 mm doorways entered 100 mm apart on one wall are one 1000 mm hole, not 1800 mm of hole:
+ * without the merge the gripper, beading and skirting quantities come out short.
+ */
+export function openingLength(poly: Polygon, doorways: Doorway[]): Mm {
+  const byEdge = new Map<number, [Mm, Mm][]>();
+  for (const d of doorways) {
+    const len = edgeLength(poly, d.edgeIndex);
+    const start = Math.max(0, Math.min(d.offset, len));
+    const end = Math.max(start, Math.min(d.offset + d.width, len));
+    if (end - start <= EPS) continue;
+    const key = normalizeEdgeIndex(poly, d.edgeIndex);
+    const list = byEdge.get(key);
+    if (list) list.push([start, end]);
+    else byEdge.set(key, [[start, end]]);
+  }
+  let sum = 0;
+  for (const list of byEdge.values()) {
+    list.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    let [s, e] = list[0]!;
+    for (let i = 1; i < list.length; i++) {
+      const [s2, e2] = list[i]!;
+      if (s2 <= e + EPS) e = Math.max(e, e2);
+      else {
+        sum += e - s;
+        s = s2;
+        e = e2;
+      }
+    }
+    sum += e - s;
+  }
+  return sum;
+}
+
+/** True when two or more openings overlap on the same edge (almost always a data-entry mistake). */
+export function hasOverlappingDoorways(poly: Polygon, doorways: Doorway[]): boolean {
+  const separate = doorways.reduce((s, d) => s + doorwaySegment(poly, d).width, 0);
+  return separate - openingLength(poly, doorways) > 1;
+}
+
+/** Perimeter that needs gripper / beading: total perimeter minus the (merged) doorway openings. */
 export function fixingPerimeter(poly: Polygon, doorways: Doorway[]): Mm {
-  const total = polygonPerimeter(poly);
-  const openings = doorways.reduce((s, d) => s + doorwaySegment(poly, d).width, 0);
-  return Math.max(0, total - openings);
+  return Math.max(0, polygonPerimeter(poly) - openingLength(poly, doorways));
+}
+
+/**
+ * True when no two non-adjacent edges of the polygon PROPERLY cross (meet at a point interior to
+ * both). A self-intersecting ("bowtie") outline has a shoelace area that cancels part of itself and
+ * a bounding box larger than the floor, so it would be quoted with too little carpet in the area and
+ * too much on the roll.
+ *
+ * Edges that merely touch or run along one another are not treated as crossings: a rectilinear room
+ * with a recess clamped to the opposite wall is degenerate but its area and extents are still right,
+ * and calling that "crossed" would refuse to quote a room the user can see on the plan.
+ */
+export function isSimplePolygon(poly: Polygon): boolean {
+  const n = poly.length;
+  if (n < 3) return false;
+  for (let i = 0; i < n; i++) {
+    const a1 = poly[i]!;
+    const a2 = poly[(i + 1) % n]!;
+    for (let j = i + 1; j < n; j++) {
+      if (j === i || (j + 1) % n === i || (i + 1) % n === j) continue; // adjacent edges share a vertex
+      const b1 = poly[j]!;
+      const b2 = poly[(j + 1) % n]!;
+      if (segmentsCross(a1, a2, b1, b2)) return false;
+    }
+  }
+  return true;
+}
+
+function orientation(a: Point, b: Point, c: Point): number {
+  const v = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  return Math.abs(v) < EPS ? 0 : Math.sign(v);
+}
+
+/** A proper crossing: each segment has one endpoint strictly either side of the other's line. */
+function segmentsCross(a1: Point, a2: Point, b1: Point, b2: Point): boolean {
+  const o1 = orientation(a1, a2, b1);
+  const o2 = orientation(a1, a2, b2);
+  const o3 = orientation(b1, b2, a1);
+  const o4 = orientation(b1, b2, a2);
+  return o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4;
 }
 
 /** Ray-casting point-in-polygon (boundary counts as inside). */

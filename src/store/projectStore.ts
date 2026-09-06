@@ -5,6 +5,7 @@
  */
 import { create } from 'zustand';
 import type { Project, Room, Staircase, Product, FloorPlanDocument, Doorway, Step, PriceBook } from '@engine/types';
+import { parseProject } from '@engine/serialize';
 import { DEFAULT_BROADLOOM_OPTIONS, DEFAULT_HARD_FLOOR, DEFAULT_UNDERLAY, DEFAULT_ACCESSORIES, DEFAULT_FLOOR_PREP, DEFAULT_PRICES, DEFAULT_STEP, CARPET_MAX_ROLL_LENGTH, CUT_INCREMENT, DEFAULT_CARPET_THICKNESS, DEFAULT_DOOR_WIDTH } from '@engine/defaults';
 import { newId } from './ids';
 
@@ -102,12 +103,22 @@ export function makeSteps(count: number, base: Omit<Step, 'id'> = DEFAULT_STEP):
   return Array.from({ length: count }, () => ({ id: newId('step'), ...base }));
 }
 
+/**
+ * Read the autosaved project back.
+ *
+ * The stored JSON goes through the same `parseProject` repair as an imported file: it may have been
+ * written by an older version, or hand-edited, and the engine has loops and non-null assertions that
+ * assume validated numbers (a zero roll width used to hang the tab). A bare `JSON.parse` gave the
+ * engine whatever localStorage happened to hold.
+ */
 function loadPersisted(): Project | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { project?: Project };
-    return parsed.project ?? null;
+    const parsed = JSON.parse(raw) as { project?: unknown };
+    if (parsed.project === undefined || parsed.project === null) return null;
+    const res = parseProject(JSON.stringify(parsed.project));
+    return 'error' in res ? null : res.project;
   } catch {
     return null;
   }
@@ -174,9 +185,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         id,
         name: partial?.name ?? `Room ${state.project.rooms.length + 1}`,
         shape: partial?.shape ?? { kind: 'rectangle', length: 4000, width: 3000 },
-        doorways: partial?.doorways ?? [
-          { id: newId('door'), edgeIndex: 0, offset: 100, width: DEFAULT_DOOR_WIDTH, transition: 'carpet', label: 'Door' },
-        ],
+        // The label names THIS room's doorway; it is never an identity. Two rooms both starting with
+        // a doorway called "Door" is normal, and pairing the two sides of one opening is done with
+        // `sharedOpeningId` in the doorway editor.
+        doorways: partial?.doorways ?? [{ id: newId('door'), edgeIndex: 0, offset: 100, width: DEFAULT_DOOR_WIDTH, transition: 'carpet', label: `${partial?.name ?? `Room ${state.project.rooms.length + 1}`} door` }],
         productId: partial?.productId ?? state.project.products[0]?.id ?? '',
         subfloor: partial?.subfloor ?? { type: 'floorboards', condition: 'good', existingCovering: 'carpet', existingGripper: true },
         ...(partial?.planning ? { planning: partial.planning } : {}),
@@ -199,7 +211,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const copy: Room = structuredClone(src);
       copy.id = newId('room');
       copy.name = `${src.name} (copy)`;
-      copy.doorways = copy.doorways.map((d) => ({ ...d, id: newId('door') }));
+      // A copy is a DIFFERENT room: its doorways are new openings, so the link to whatever the
+      // original was paired with must not come with them or the copy's bars would be dropped.
+      copy.doorways = copy.doorways.map((d) => {
+        const { sharedOpeningId: _shared, ...rest } = d;
+        return { ...rest, id: newId('door') };
+      });
       mutate((proj) => ({ ...proj, rooms: [...proj.rooms, copy] }));
       set({ selection: { kind: 'room', id: copy.id } });
       return copy.id;
@@ -217,10 +234,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           r.id === roomId
             ? {
                 ...r,
-                doorways: [
-                  ...r.doorways,
-                  { edgeIndex: 0, offset: 100, width: DEFAULT_DOOR_WIDTH, transition: 'carpet', label: `Door ${r.doorways.length + 1}`, ...d, id },
-                ],
+                doorways: [...r.doorways, { edgeIndex: 0, offset: 100, width: DEFAULT_DOOR_WIDTH, transition: 'carpet', label: `${r.name} door ${r.doorways.length + 1}`, ...d, id }],
               }
             : r,
         ),

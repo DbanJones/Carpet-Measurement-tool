@@ -27,14 +27,21 @@ export function App() {
 
   return (
     <div className="app">
+      <a className="skip-link" href="#main">
+        Skip to the editor
+      </a>
       <TopBar />
-      <div className="layout">
-        <aside className="panel sidebar-column no-print">
+      {/* `layout-results` replaces a `:has()` selector in the print rules: browsers without `:has()`
+          printed a blank page from the Estimate tab. */}
+      <div className={tab === 'results' ? 'layout layout-results' : 'layout'}>
+        <aside className="panel sidebar-column no-print" aria-label="Project contents">
           <Sidebar />
         </aside>
-        <main className="main-column">{main}</main>
+        <main className="main-column" id="main" tabIndex={-1}>
+          {main}
+        </main>
         {tab !== 'results' ? (
-          <aside className="panel results-column">
+          <aside className="panel results-column" aria-label="Running estimate">
             <ResultsPanel />
           </aside>
         ) : null}

@@ -59,11 +59,17 @@ const codes = (p: ReturnType<typeof planStaircase>) => p.warnings.map((w) => w.c
 
 // Reference totals for the base flight (cap and band or waterfall — the carpet ON the stair is the same):
 //   net area  = 12 x 443 x 860 + 220 x 860 = 4 571 760 + 189 200 = 4 760 960 mm²
-//   gripper   = ceil(13 steps x 2 lengths x 860 x 1.10) = ceil(22 360 x 1.1) = 24 596 mm
-//   underlay  = (12 x 423 x 860 + 200 x 860) / 1e6 = (4 365 360 + 172 000) / 1e6 = 4.53736 m²
+//   gripper   = ceil((12 steps x 2 lengths + top riser x 1) x 860 x 1.10) = ceil(21 500 x 1.1) = 23 650 mm
+//               (the top step's tread is the landing, so only its riser foot is gripped)
+//   underlay  = 12 tread pads of (going 223 + PAD_NOSING_OVERLAP 50) x 860 = 2 817 360 mm² = 2.81736 m²
+//               (pads go on the treads only; the top step has no tread of its own)
 const BASE_NET = 4_760_960;
-const BASE_GRIPPER = 24_596;
-const BASE_UNDERLAY = 4.53736;
+const BASE_GRIPPER = 23_650;
+const BASE_UNDERLAY = 2.81736;
+/** Every step but the top one carries a tread pad. */
+const BASE_PADS = 12;
+/** Underlay down the whole flight (`underlayRisers`): 12 x 423 x 860 + 200 x 860. */
+const BASE_UNDERLAY_FULL_FLIGHT = 4.53736;
 
 describe('helpers', () => {
   it('stepWrapLength: rise + going + nosing, or rise + nosing for the top step', () => {
@@ -84,7 +90,7 @@ describe('helpers', () => {
   });
 
   it('ceilMm ignores float drift and sideCount counts sides', () => {
-    expect(ceilMm(22360 * 1.1)).toBe(24596);
+    expect(ceilMm(21500 * 1.1)).toBe(23650);
     expect(ceilMm(24596.4)).toBe(24597);
     expect(sideCount('none')).toBe(0);
     expect(sideCount('left')).toBe(1);
@@ -117,7 +123,7 @@ describe('(1) cap and band, closed strings', () => {
     expect(p.netAreaMm2).toBe(BASE_NET);
     expect(p.gripperLength).toBe(BASE_GRIPPER);
     expect(p.underlayAreaM2).toBeCloseTo(BASE_UNDERLAY, 9);
-    expect(p.underlayPads).toBe(13);
+    expect(p.underlayPads).toBe(BASE_PADS);
   });
 
   it('closed strings need no binding, rods or nosings and raise no warnings', () => {
@@ -130,9 +136,9 @@ describe('(1) cap and band, closed strings', () => {
   });
 
   it('gripper wastage comes from the accessories options', () => {
-    // 22 360 x 1.00 = 22 360; 22 360 x 1.05 = 23 478.000000000004 -> 23 478
-    expect(plan(stair(), carpet, { accessories: { gripperWastage: 0 } }).gripperLength).toBe(22_360);
-    expect(plan(stair(), carpet, { accessories: { gripperWastage: 0.05 } }).gripperLength).toBe(23_478);
+    // 21 500 x 1.00 = 21 500; 21 500 x 1.05 = 22 575.000000000004 -> 22 575
+    expect(plan(stair(), carpet, { accessories: { gripperWastage: 0 } }).gripperLength).toBe(21_500);
+    expect(plan(stair(), carpet, { accessories: { gripperWastage: 0.05 } }).gripperLength).toBe(22_575);
   });
 });
 
@@ -150,7 +156,7 @@ describe('(2) waterfall', () => {
     expect(p.netAreaMm2).toBe(BASE_NET);
     expect(p.gripperLength).toBe(BASE_GRIPPER);
     expect(p.underlayAreaM2).toBeCloseTo(BASE_UNDERLAY, 9);
-    expect(p.underlayPads).toBe(13);
+    expect(p.underlayPads).toBe(BASE_PADS);
     expect(codes(p)).not.toContain('WATERFALL_SPLIT');
   });
 });
@@ -185,11 +191,11 @@ describe('(3) winders', () => {
     // 9 straight steps (13 - 3 winders - top), 3 winders, 1 top:
     // net = 9 x 443 x 860 + 3 x 820 x 860 + 220 x 860 = 3 428 820 + 2 115 600 + 189 200 = 5 733 620
     expect(p.netAreaMm2).toBe(5_733_620);
-    // gripper = (13 x 2 x 860 + 3 x 860) x 1.1 = (22 360 + 2 580) x 1.1 = 27 434
-    expect(p.gripperLength).toBe(27_434);
-    // underlay = 9 x 423 x 860 + 3 x 800 x 860 + 200 x 860 = 3 274 020 + 2 064 000 + 172 000 = 5 510 020 mm²
-    expect(p.underlayAreaM2).toBeCloseTo(5.51002, 9);
-    expect(p.underlayPads).toBe(13);
+    // gripper = (12 x 2 x 860 + 860 top riser + 3 x 860 winder back edges) x 1.1 = (21 500 + 2 580) x 1.1 = 26 488
+    expect(p.gripperLength).toBe(26_488);
+    // tread pads only: 9 x (223 + 50) x 860 + 3 winders x (600 + 50) x 860 = 2 113 020 + 1 677 000 = 3 790 020 mm²
+    expect(p.underlayAreaM2).toBeCloseTo(3.79002, 9);
+    expect(p.underlayPads).toBe(BASE_PADS);
   });
 
   it('cap and band: winders get the cap-and-band extra like every other piece', () => {
@@ -280,12 +286,12 @@ describe('(6) runners', () => {
     // binding = 2 x 6 226 + 2 x 600 = 12 452 + 1 200 = 13 652
     expect(p.bindingLength).toBe(13_652);
     expect(p.stairRods).toBe(13);
-    // gripper = ceil(13 x 2 x 600 x 1.1) = ceil(15 600 x 1.1) = 17 160
-    expect(p.gripperLength).toBe(17_160);
-    // net = (12 x 443 + 220) x 600 = 5 536 x 600 = 3 321 600; underlay = (12 x 423 + 200) x 600 = 5 276 x 600 = 3 165 600 mm²
+    // gripper = ceil((12 x 2 + 1) x 600 x 1.1) = ceil(15 000 x 1.1) = 16 500
+    expect(p.gripperLength).toBe(16_500);
+    // net = (12 x 443 + 220) x 600 = 5 536 x 600 = 3 321 600; tread pads = 12 x 273 x 600 = 1 965 600 mm²
     expect(p.netAreaMm2).toBe(3_321_600);
-    expect(p.underlayAreaM2).toBeCloseTo(3.1656, 9);
-    expect(p.underlayPads).toBe(13);
+    expect(p.underlayAreaM2).toBeCloseTo(1.9656, 9);
+    expect(p.underlayPads).toBe(BASE_PADS);
     expect(codes(p)).not.toContain('OPEN_STRING_BINDING');
   });
 
@@ -334,12 +340,12 @@ describe('(7) landings', () => {
     // net area adds 860 x 1 720 = 1 479 200 -> 6 240 160
     expect(p.netAreaMm2).toBe(BASE_NET + 860 * 1720);
     expect(p.netAreaMm2).toBe(6_240_160);
-    // gripper adds perimeter - width = 2 x 1 720 + 2 x 860 - 860 = 4 300: ceil((22 360 + 4 300) x 1.1) = 29 326
-    expect(p.gripperLength).toBe(29_326);
-    expect(p.gripperLength).toBe(ceilMm((22_360 + (2 * 1720 + 2 * 860 - 860)) * 1.1));
-    // underlay adds the landing area: 4.53736 + 1.4792 = 6.01656; still 13 pads
-    expect(p.underlayAreaM2).toBeCloseTo(6.01656, 9);
-    expect(p.underlayPads).toBe(13);
+    // gripper adds perimeter - width = 2 x 1 720 + 2 x 860 - 860 = 4 300: ceil((21 500 + 4 300) x 1.1) = 28 380
+    expect(p.gripperLength).toBe(28_380);
+    expect(p.gripperLength).toBe(ceilMm((21_500 + (2 * 1720 + 2 * 860 - 860)) * 1.1));
+    // underlay adds the landing area (landings are floors, padded across): 2.81736 + 1.4792 = 4.29656
+    expect(p.underlayAreaM2).toBeCloseTo(4.29656, 9);
+    expect(p.underlayPads).toBe(BASE_PADS);
   });
 
   it('waterfall: the landing breaks the flight into two runs', () => {
@@ -389,9 +395,12 @@ describe('(8) top riser by landing', () => {
     expect(p.netAreaMm2).toBe(5_660_960);
     // gripper = 12 x 2 x 860 (steps) + 860 (top riser foot only) + 2 x 1 000 + 900 (landing) = 20 640 + 860 + 2 900 = 24 400; x1.1 = 26 840
     expect(p.gripperLength).toBe(26_840);
-    // underlay = 12 x 423 x 860 + 200 x 860 + 1 000 x 900 = 4 365 360 + 172 000 + 900 000 = 5 437 360 mm²; 12 pads
-    expect(p.underlayAreaM2).toBeCloseTo(5.43736, 9);
+    // underlay = 12 tread pads of 273 x 860 + the landing 1 000 x 900 = 2 817 360 + 900 000 = 3 717 360 mm²
+    expect(p.underlayAreaM2).toBeCloseTo(3.71736, 9);
     expect(p.underlayPads).toBe(12);
+    // the whole-flight option puts a pad on every riser too: 12 x 423 x 860 + 200 x 860 + the landing
+    const full = plan(stair({ landings: [top], topRiserByLanding: true, underlayRisers: true }));
+    expect(full.underlayAreaM2).toBeCloseTo(BASE_UNDERLAY_FULL_FLIGHT + 0.9, 9);
   });
 
   it('waterfall: the run covers steps 1–12 only', () => {
@@ -534,10 +543,11 @@ describe('sizes and other products', () => {
     expect(p.pieces).toHaveLength(1);
     expect(p.pieces[0]).toMatchObject({ length: 325, width: 960 });
     expect(p.netAreaMm2).toBe(220 * 860);
-    // ceil(2 x 860 x 1.1) = ceil(1 892.0000000000002) = 1 892
-    expect(p.gripperLength).toBe(1892);
-    expect(p.underlayAreaM2).toBeCloseTo(0.172, 9);
-    expect(p.underlayPads).toBe(1);
+    // the only step IS the top step: one gripper length at the riser foot, and no tread to pad
+    // ceil(860 x 1.1) = ceil(946.0000000000001) = 946
+    expect(p.gripperLength).toBe(946);
+    expect(p.underlayAreaM2).toBe(0);
+    expect(p.underlayPads).toBe(0);
   });
 
   it('a 40-riser flight scales linearly', () => {
@@ -545,7 +555,8 @@ describe('sizes and other products', () => {
     // 39 x 473 + 250 + 300 = 18 447 + 550 = 18 997
     expect(p.pieces[0]).toMatchObject({ length: 18_997, width: 960 });
     expect(plan(stair({ steps: steps(40) })).pieces).toHaveLength(40);
-    expect(p.underlayPads).toBe(40);
+    // 39 tread pads: the 40th step's tread is the landing
+    expect(p.underlayPads).toBe(39);
   });
 
   it('a measured nosing overhang overrides the default', () => {

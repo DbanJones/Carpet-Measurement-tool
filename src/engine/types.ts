@@ -137,6 +137,15 @@ export interface Doorway {
   transition: DoorwayTransition;
   /** If the same broadloom continues through the opening without a bar (e.g. hall into landing). */
   continuous?: boolean;
+  /**
+   * The PHYSICAL opening this doorway is one side of. A door between two rooms is measured from
+   * both rooms (each room's gripper has to stop at it), but there is only one door leaf and one bar
+   * to buy: give both entries the same `sharedOpeningId` and the estimate counts the opening once.
+   *
+   * Never inferred from `label` — "Door", "Doorway" and "Door to landing" are exactly what people
+   * type, and matching on them buys one bar for two different doorways (or two for one).
+   */
+  sharedOpeningId?: Id;
   label?: string;
 }
 
@@ -247,6 +256,11 @@ export interface Staircase {
    * stairs then stop one riser short and the landing piece gains rise + tuck.
    */
   topRiserByLanding?: boolean;
+  /**
+   * Underlay the risers as well as the treads (a continuous pad down the whole flight). Off by
+   * default: UK practice is a pad per tread, wrapped `PAD_NOSING_OVERLAP` over the nosing.
+   */
+  underlayRisers?: boolean;
   subfloor?: Subfloor;
   notes?: string;
 }
@@ -335,6 +349,8 @@ export interface FloorPrepOptions {
   /** Primer coverage m² per litre (diluted, one coat). */
   primerCoverageM2PerLitre: number;
   primerCoats: number;
+  /** Primer is sold in sealed cans of this many litres; the order is rounded up to whole cans. */
+  primerCanLitres: number;
   plySheetLength: Mm;
   plySheetWidth: Mm;
   plyWastage: number;
@@ -369,12 +385,31 @@ export interface PriceBook {
     plyPerM2: number;
     doorEasingPerDoor: number;
     bindingPerM: number;
+    /**
+     * Least the LABOUR on a job is charged, whatever the area. A 2.2 x 1.9 m bathroom in glue-down
+     * LVT over a new ply overlay is a full day cutting round a WC pan and pedestal, but pure £/m²
+     * rates price it at about £130. The shortfall is added as its own line so the quote says why.
+     * A per-ROOM minimum is deliberately not used: at £5/m² carpet it would put a minimum charge on
+     * every room under 24 m² of a whole-house job, which no fitter charges. Set 0 to switch off.
+     */
+    minimumJobLabour: number;
+    /** Lifting old gripper (per metre of perimeter). */
+    gripperRemovalPerM: number;
+    /** Screwing down or sanding floorboards before an overlay (per m²). */
+    boardPrepPerM2: number;
+    /** Taking skirting off and refitting it over the expansion gap (per metre). */
+    skirtingRefitPerM: number;
+    /** One hygrometer / RH test of the slab. */
+    moistureTestPerTest: number;
   };
   materials: {
     gripperPerLength: number;
+    /** A retail pack of `AccessoryOptions.gripperPerPack` lengths; gripper is bought by the pack. */
+    gripperPerPack: number;
     doorBarPerBar: number;
     latexPerBag: number;
-    primerPerLitre: number;
+    /** A sealed can of primer — the unit it is actually sold in (see FloorPrepOptions.primerCanLitres). */
+    primerPerCan: number;
     plyPerSheet: number;
     hardboardPerSheet: number;
     liquidDpmPerKg: number;
@@ -382,6 +417,8 @@ export interface PriceBook {
     seamTapePerRoll: number;
     doubleSidedTapePerRoll: number;
     underlayTapePerRoll: number;
+    /** Hard floor (laminate / LVT) underlay, per pack of `HardFloorOptions.underlayPackCoverageM2`. */
+    hardFloorUnderlayPerPack: number;
     beadingPerLength: number;
     thresholdPerItem: number;
     stairNosingPerItem: number;
@@ -389,6 +426,8 @@ export interface PriceBook {
     adhesivePerTub: number;
     tackifierPerTub: number;
     plyScrewsPerBox: number;
+    /** Cold weld / seam sealer for a bonded sheet vinyl seam, per metre of seam. */
+    vinylSeamWeldPerM: number;
   };
 }
 
@@ -409,6 +448,18 @@ export interface Project {
     floorPrep: FloorPrepOptions;
   };
   prices: PriceBook;
+  /**
+   * Who and when the quote is for. Free text, filled in by the UI and printed above the figures —
+   * the engine never reads them and never fills the date in for itself (it has no clock).
+   */
+  customer?: string;
+  siteAddress?: string;
+  quoteRef?: string;
+  /** Date the quote was prepared, as the user typed or picked it (ISO `YYYY-MM-DD` from the UI). */
+  quoteDate?: string;
+  /** How long the price holds, e.g. "30 days". */
+  validFor?: string;
+  /** Free-text notes and terms, printed under the bill of materials. */
   notes?: string;
 }
 

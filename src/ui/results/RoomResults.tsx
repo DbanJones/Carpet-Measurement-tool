@@ -84,7 +84,10 @@ export function RoomResults({ room, summary, estimate, project }: RoomResultsPro
               <dd>{summary ? formatLength(summary.perimeter, unit) : '—'}</dd>
             </div>
             <div>
-              <dt>Gripper perimeter</dt>
+              {/* Only stretched-in carpet is fixed to gripper. On a laminate or LVT room the same
+                  figure is the run available for beading or the expansion gap; calling it "gripper"
+                  invites someone to order gripper for a floating floor. */}
+              <dt>{product?.kind === 'carpet' ? 'Gripper perimeter' : 'Fixing / beading perimeter'}</dt>
               <dd>{summary ? formatLength(summary.gripperPerimeter, unit) : '—'}</dd>
             </div>
             <div>

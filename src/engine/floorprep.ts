@@ -230,7 +230,13 @@ const PRIME_REASON = 'prime the base before the smoothing compound';
 const ANHYDRITE_PRIME_REASON = 'sand off the laitance and use an anhydrite-specific primer';
 const ASPHALT_LATEX_REASON = 'use a compatible (asphalt-tolerant) compound; no primer';
 const POOR = { poorMinThickness: POOR_SUBFLOOR_MIN_LATEX_THICKNESS };
-const SKIM = { thickness: PLY_SKIM_LATEX_THICKNESS };
+/**
+ * A skim over a new ply overlay. It is quantified over the WHOLE room at
+ * `PLY_SKIM_LATEX_THICKNESS`, not from the joint length, so it gets its own variant and its own
+ * wording on the quote — "skim ply joints" reads as a few metres of filler when it is a thin pour.
+ */
+const SKIM = { thickness: PLY_SKIM_LATEX_THICKNESS, variant: 'over ply overlay' };
+const SKIM_REASON = `skim the new ply at ${PLY_SKIM_LATEX_THICKNESS} mm over the whole floor so the joints and screw heads do not telegraph through`;
 
 /**
  * The rule table. Rows are evaluated in order for every room; every matching row contributes its
@@ -337,7 +343,7 @@ export const PREP_RULES: PrepRule[] = [
     subfloors: RAW_BOARDS,
     steps: [
       step('ply', true, 'BS 8203: overlay boards with flooring-grade ply before a resilient floor'),
-      step('latex', false, 'skim ply joints', SKIM),
+      step('latex', false, SKIM_REASON, SKIM),
     ],
   },
   {
@@ -345,14 +351,14 @@ export const PREP_RULES: PrepRule[] = [
     coverings: ['resilient'],
     subfloors: ['plywood'],
     conditions: ['good'],
-    steps: [step('latex', false, 'skim ply joints', SKIM)],
+    steps: [step('latex', false, SKIM_REASON, SKIM)],
   },
   {
     id: 'resilient-plywood-worn',
     coverings: ['resilient'],
     subfloors: ['plywood'],
     conditions: ['uneven', 'poor'],
-    steps: [step('ply', true, 'existing ply is not flat enough — overlay with new ply'), step('latex', false, 'skim ply joints', SKIM)],
+    steps: [step('ply', true, 'existing ply is not flat enough — overlay with new ply'), step('latex', false, SKIM_REASON, SKIM)],
   },
   {
     id: 'resilient-boards-fix',
@@ -563,7 +569,13 @@ export const PREP_ITEM_SPECS: Record<PrepItemKind, PrepItemSpec> = {
   disposal: { description: 'Dispose of old floor covering', unit: 'm²', whole: false, exact: (c) => c.areaM2 },
   gripper_removal: { description: 'Remove existing gripper', unit: 'm', whole: false, exact: (c) => c.perimeterM },
   moisture_test: { description: 'Subfloor moisture test (hygrometer)', unit: 'each', whole: true, exact: () => MOISTURE_TESTS_PER_ROOM },
-  primer: { description: 'Primer', unit: 'litre', whole: true, exact: (c) => (c.areaM2 * c.options.primerCoats) / c.options.primerCoverageM2PerLitre },
+  // Primer is sold in sealed cans, not by the litre: 0.8 L of primer is still one can to buy.
+  primer: {
+    description: 'Primer',
+    unit: 'can',
+    whole: true,
+    exact: (c) => (c.areaM2 * c.options.primerCoats) / c.options.primerCoverageM2PerLitre / Math.max(c.options.primerCanLitres, 1e-9),
+  },
   latex: {
     description: 'Latex smoothing compound',
     unit: 'bag',
@@ -677,9 +689,10 @@ function sequenceIndex(kind: PrepItemKind): number {
   return i < 0 ? PREP_SEQUENCE.length : i;
 }
 
-function describe(acc: Accumulator): string {
+function describe(acc: Accumulator, options: FloorPrepOptions): string {
   let d = PREP_ITEM_SPECS[acc.kind].description;
   if (acc.variant) d += ` (${acc.variant})`;
+  if (acc.kind === 'primer' && options.primerCanLitres > 0) d += `, ${options.primerCanLitres} L cans`;
   if (acc.kind === 'latex' && acc.thicknesses.length > 0) {
     const lo = Math.min(...acc.thicknesses);
     const hi = Math.max(...acc.thicknesses);
@@ -692,7 +705,8 @@ function describe(acc: Accumulator): string {
  * Plan the floor preparation for a set of rooms.
  *
  * Trade rules (see `PREP_RULES`): the old floor comes up and goes in the skip; a slab with no known
- * DPM is hygrometer-tested before a resilient or click floor (BS 8203 / BS 8425); resilient floors
+ * DPM is hygrometer-tested before a resilient or click floor (BS 8203 / BS 8425); primer is ordered
+ * in whole cans, not litres; resilient floors
  * get primer + smoothing compound on concrete and a ply overlay on boards; carpet only needs
  * levelling when the base is uneven or poor (BS 5325); click floors need flatness within
  * 3 mm over 2 m; laminate / wood acclimatises 48 h; hard floors may need doors easing.
@@ -759,7 +773,7 @@ export function planFloorPrep(input: { rooms: PrepRoomInput[]; options: FloorPre
     const spec = PREP_ITEM_SPECS[acc.kind];
     items.push({
       kind: acc.kind,
-      description: describe(acc),
+      description: describe(acc, options),
       quantity: purchaseQuantity(acc.exact, spec.whole),
       unit: spec.unit,
       exactQuantity: roundTo(acc.exact, 4),

@@ -10,7 +10,7 @@ import { isBroadloom } from '@engine/types';
 import { CARPET_ROLL_WIDTHS, CARPET_ROLL_WIDTHS_OTHER, VINYL_ROLL_WIDTHS } from '@engine/defaults';
 import { roundTo } from '@engine/units';
 import { useProjectStore } from '@store/projectStore';
-import { Checkbox, Field, LengthInput, NumberInput, Section, Select, formatLength, formatMoney } from '@ui/components/inputs';
+import { Checkbox, Field, LengthInput, NumberInput, Section, Select, formatLength, formatMoney, FieldGroup } from '@ui/components/inputs';
 import { KIND_LABELS, KIND_OPTIONS, defaultProductForKind, type BroadloomDraft, type PackDraft } from './presets';
 import { MmInput, MoneyInput } from './fields';
 
@@ -241,13 +241,15 @@ function BroadloomFields({
             </Field>
           )}
         </div>
-        <Field label="Also available in" hint="Tick other widths this product is stocked in; the estimate reports which width wastes least.">
+        {/* A group of checkboxes, so FieldGroup: a <label> wrapping them would tick the first one
+            whenever the caption was clicked, silently adding a roll width to the comparison. */}
+        <FieldGroup label="Also available in" hint="Tick other widths this product is stocked in; the estimate reports which width wastes least.">
           <span className="width-checks">
             {altCandidates.map((w) => (
               <Checkbox key={w} checked={alternatives.includes(w)} label={widthLabel(w, unit)} onChange={(on) => toggleAlt(w, on)} />
             ))}
           </span>
-        </Field>
+        </FieldGroup>
         <div className="grid-2">
           <Field label="Maximum roll length" hint="A requirement longer than one roll is split across rolls (carpet about 30 m, vinyl 20 m).">
             <LengthInput value={product.maxRollLength} unit={unit} min={1000} ariaLabel="Maximum roll length" onChange={(maxRollLength) => onChange({ maxRollLength })} />

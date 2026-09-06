@@ -187,8 +187,30 @@ describe('RoomEditor', () => {
     const rows = screen.getAllByLabelText('Doorway label');
     expect(rows).toHaveLength(2);
     const secondRow = rows[1]!.closest('tr')!;
+    // a row delete discards a measured opening and there is no undo, so it asks first
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(within(secondRow).getByRole('button', { name: 'Remove' }));
+    expect(getRoom(id).doorways).toHaveLength(2);
+    confirmSpy.mockReturnValue(true);
     fireEvent.click(within(secondRow).getByRole('button', { name: 'Remove' }));
     expect(getRoom(id).doorways).toHaveLength(1);
+    confirmSpy.mockRestore();
+  });
+
+  it('links a doorway to the same opening in another room so only one bar is bought', () => {
+    const hall = addLounge();
+    useProjectStore.getState().updateRoom(hall, { name: 'Hall' });
+    const lounge = useProjectStore.getState().addRoom({ name: 'Lounge' });
+    render(<RoomEditor roomId={lounge} />);
+    const shared = screen.getByLabelText('Shared with') as HTMLSelectElement;
+    // the far side is offered by room and doorway, never matched on the label
+    const option = Array.from(shared.options).find((o) => o.textContent?.startsWith('Hall —'))!;
+    expect(option).toBeTruthy();
+    fireEvent.change(shared, { target: { value: option.value } });
+    const openingId = getRoom(lounge).doorways[0]!.sharedOpeningId;
+    expect(openingId).toBeTruthy();
+    // both sides now carry the same opening id
+    expect(getRoom(hall).doorways[0]!.sharedOpeningId).toBe(openingId);
   });
 
   it('edits the subfloor', () => {

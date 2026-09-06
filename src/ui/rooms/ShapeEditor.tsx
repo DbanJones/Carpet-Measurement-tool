@@ -4,8 +4,8 @@
  * polygon entered either by "walking the walls" or as an editable point list.
  */
 import { useState } from 'react';
-import type { Mm, Polygon, Room, RoomShape, WallFeature } from '@engine/types';
-import { boundingBox, polygonAreaM2, polygonPerimeter, rectanglePolygon, walkToPolygon } from '@engine/geometry';
+import type { Doorway, Mm, Polygon, Room, RoomShape, WallFeature } from '@engine/types';
+import { boundingBox, edgeLength, polygonAreaM2, polygonPerimeter, rectanglePolygon, walkToPolygon } from '@engine/geometry';
 import { useProjectStore } from '@store/projectStore';
 import { newId } from '@store/ids';
 import { Field, LengthInput, Select, formatArea, formatLength } from '@ui/components/inputs';
@@ -91,6 +91,25 @@ export function convertShape(shape: RoomShape, kind: ShapeKind): RoomShape {
   }
 }
 
+/**
+ * Move the doorways onto an outline that has a different number of walls.
+ *
+ * A doorway records an edge INDEX, so an 8-wall room converted to a 4-wall rectangle would leave
+ * indices 4-7 pointing at nothing; the engine reports them and leaves them out of the quantities,
+ * but the fitter would rather they landed somewhere sensible. Each doorway keeps the wall it can
+ * still reach (its index, if it exists and is long enough) and is otherwise clamped to the last
+ * wall, with its offset pulled back so the opening still fits.
+ */
+export function remapDoorways(doorways: Doorway[], next: Polygon): Doorway[] {
+  if (next.length < 3) return doorways;
+  return doorways.map((d) => {
+    const edgeIndex = d.edgeIndex >= 0 && d.edgeIndex < next.length ? d.edgeIndex : next.length - 1;
+    const len = edgeLength(next, edgeIndex);
+    const offset = Math.max(0, Math.min(d.offset, Math.max(0, len - d.width)));
+    return edgeIndex === d.edgeIndex && offset === d.offset ? d : { ...d, edgeIndex, offset };
+  });
+}
+
 export function ShapeEditor({ room, unit }: { room: Room; unit: DisplayUnit }) {
   const updateRoom = useProjectStore((s) => s.updateRoom);
   const shape = room.shape;
@@ -99,7 +118,9 @@ export function ShapeEditor({ room, unit }: { room: Room; unit: DisplayUnit }) {
 
   const onKind = (kind: ShapeKind) => {
     if (kind === shape.kind) return;
-    setShape(convertShape(shape, kind));
+    const next = convertShape(shape, kind);
+    // Changing the shape changes the walls; doorways must follow or they are silently orphaned.
+    updateRoom(room.id, (r) => ({ ...r, shape: next, doorways: remapDoorways(r.doorways, safePolygon(next)) }));
     if (kind === 'polygon') setPolygonMode('walk');
   };
 
@@ -284,6 +305,10 @@ function FeaturesForm({
                 const wl = wallLength(shape, f.wall);
                 const overrun = f.offset + f.width > wl;
                 const overlap = overlapsAnother(f, shape.features);
+                // A recess cannot be deeper than the room: the wall would come out through the far
+                // side. The engine clamps it and warns, but say so where it is typed.
+                const depthLimit = f.wall === 'top' || f.wall === 'bottom' ? shape.width : shape.length;
+                const tooDeep = f.depth < 0 && -f.depth > depthLimit;
                 return (
                   <tr key={f.id} data-feature-id={f.id}>
                     <td>
@@ -305,6 +330,9 @@ function FeaturesForm({
                         ariaLabel="Feature depth"
                         onChange={(d) => updateFeature(f.id, { depth: f.depth < 0 ? -d : d })}
                       />
+                      {tooDeep ? (
+                        <div className="field-hint invalid">Deeper than the room ({formatLength(depthLimit, unit)}); it is cut back to the opposite wall.</div>
+                      ) : null}
                     </td>
                     <td>
                       <Select
@@ -321,7 +349,16 @@ function FeaturesForm({
                       <input type="text" className="cell-text" aria-label="Feature label" value={f.label ?? ''} onChange={(e) => updateFeature(f.id, { label: e.target.value })} />
                     </td>
                     <td>
-                      <button type="button" className="danger" onClick={() => setFeatures(shape.features.filter((x) => x.id !== f.id))}>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => {
+                          // no undo anywhere in the app; the row holds a measured width and depth
+                          if (window.confirm(`Remove "${f.label ?? 'this feature'}"? Its measured width and depth are lost.`)) {
+                            setFeatures(shape.features.filter((x) => x.id !== f.id));
+                          }
+                        }}
+                      >
                         Remove
                       </button>
                     </td>
@@ -448,7 +485,13 @@ function WalkTheWalls({ unit, onChange }: { unit: DisplayUnit; onChange: (s: Roo
                     <LengthInput value={s.length} unit={unit} min={0} ariaLabel={`Wall ${i + 1} length`} onChange={(length) => update(s.id, { length })} />
                   </td>
                   <td>
-                    <button type="button" className="danger" onClick={() => apply(segments.filter((x) => x.id !== s.id))}>
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() => {
+                        if (window.confirm(`Remove wall ${i + 1}? Its measured length is lost.`)) apply(segments.filter((x) => x.id !== s.id));
+                      }}
+                    >
                       Remove
                     </button>
                   </td>
@@ -511,7 +554,14 @@ function PointsTable({ points, unit, onChange }: { points: Polygon; unit: Displa
                   <LengthInput value={p.y} unit={unit} min={0} ariaLabel={`Point ${i + 1} y`} onChange={(y) => setPoint(i, { y })} />
                 </td>
                 <td>
-                  <button type="button" className="danger" disabled={points.length <= 3} onClick={() => setPoints(points.filter((_, j) => j !== i))}>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={points.length <= 3}
+                    onClick={() => {
+                      if (window.confirm(`Remove corner ${i + 1}? Its measured position is lost.`)) setPoints(points.filter((_, j) => j !== i));
+                    }}
+                  >
                     Remove
                   </button>
                 </td>

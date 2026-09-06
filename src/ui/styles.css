@@ -6,10 +6,16 @@
   --muted: #5f6b7a;
   --accent: #1f6feb;
   --accent-soft: #e3edff;
+  /* Text colours for the tinted backgrounds. --accent on --accent-soft is only 3.93:1 and --warn on
+     --warn-soft only 3.89:1, both under the 4.5:1 WCAG AA threshold — and they carry the selected
+     tab, the "least material" badge and every warning count. These pass at ~7:1 and ~5.4:1. */
+  --accent-text: #14539f;
   --danger: #c62828;
   --warn: #b26a00;
+  --warn-text: #8a5200;
   --warn-soft: #fff4e0;
-  --ok: #1b7f3b;
+  --ok: #16702f;
+  --ok-soft: #e6f4ea;
   --carpet: #c9a27e;
   --seam: #c62828;
   --radius: 8px;
@@ -27,6 +33,11 @@ h3 { font-size: 1rem; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; border: 1px solid var(--border); background: var(--panel); border-radius: 6px; padding: .35rem .7rem; }
 button:hover { border-color: var(--accent); }
+/* The only interaction affordance on link-style buttons, pill tabs and pressed toggles is the focus
+   ring, and the UA default is a 1px hairline over heavily restyled controls. Make it unmistakable. */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+}
 button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 button.danger { color: var(--danger); }
 button.link { border: none; background: none; padding: 0; color: var(--accent); }
@@ -46,14 +57,36 @@ input[type='number'] { width: 6.5rem; }
 .topbar .project-name { font-weight: 600; border: none; background: transparent; font-size: 1.05rem; min-width: 12rem; }
 .tabs { display: flex; gap: .25rem; }
 .tabs button { border-radius: 999px; }
-.tabs button[aria-selected='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.tabs button[aria-current='page'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.skip-link { position: absolute; left: -9999px; top: 0; z-index: 10; background: var(--panel); border: 1px solid var(--accent); border-radius: 0 0 6px 0; padding: .5rem .8rem; }
+.skip-link:focus { left: 0; }
+.topbar-title { margin: 0; font-size: 1.05rem; display: flex; align-items: center; }
+.load-warnings { padding: 0 1rem; }
+.load-warnings ul { margin: .3rem 0 0; padding-left: 1.1rem; }
+.main-column:focus { outline: none; }
 .layout { display: grid; grid-template-columns: 300px 1fr 380px; gap: 1rem; padding: 1rem; align-items: start; }
 /* Grid items are min-width:auto by default, so a wide table (doorways, stair steps, the BOM) would
    stretch the 1fr column and scroll the whole window sideways. 0 keeps the scrolling inside the
    .table-scroll wrappers where it belongs. */
 .layout > * { min-width: 0; }
 @media (max-width: 1200px) { .layout { grid-template-columns: 260px 1fr; } .layout > .results-column { grid-column: 1 / -1; } }
-@media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+/* On a phone the editor comes first: the sidebar is four lists tall, and scrolling past all of it to
+   reach the first dimension field made every edit a scroll. DOM order (and so tab order) is
+   unchanged; only the visual order moves, and the skip link jumps straight to the editor. */
+@media (max-width: 800px) {
+  .layout { grid-template-columns: 1fr; }
+  .layout > .main-column { order: 1; }
+  .layout > .results-column { order: 2; }
+  .layout > .sidebar-column { order: 3; }
+}
+/* Thumb-sized controls on touch devices: the densest tables (per-step + Winder / Delete, Remove in
+   the doorway and feature tables, the floor-plan zoom) sat at about 28 px, under WCAG 2.5.8's 24 px
+   and well under the 44 px platform guidance, and several of them delete measured values. */
+@media (pointer: coarse) {
+  button, select, input[type='text'], input[type='number'] { min-height: 44px; }
+  button { padding: .6rem .9rem; }
+  .stairs-table .stairs-step-actions { gap: .5rem; }
+}
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
 .panel + .panel { margin-top: 1rem; }
 .section { margin-bottom: 1rem; }
@@ -67,9 +100,11 @@ input[type='number'] { width: 6.5rem; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem 1rem; }
 .checkbox { display: inline-flex; gap: .4rem; align-items: center; margin: .25rem 0; }
 .list { list-style: none; margin: 0; padding: 0; }
-.list li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .4rem .5rem; border-radius: 6px; cursor: pointer; }
-.list li:hover { background: var(--accent-soft); }
-.list li[aria-selected='true'] { background: var(--accent-soft); font-weight: 600; }
+.list li { display: flex; align-items: center; justify-content: space-between; gap: .5rem; border-radius: 6px; }
+.list button.list-row { display: flex; flex-direction: column; align-items: flex-start; gap: .1rem; width: 100%; text-align: left; border: 1px solid transparent; background: none; padding: .4rem .5rem; border-radius: 6px; }
+.list button.list-row:hover { background: var(--accent-soft); border-color: transparent; }
+.list button.list-row[aria-current='true'] { background: var(--accent-soft); font-weight: 600; }
+.list .list-row-name { display: block; }
 .list .meta { color: var(--muted); font-size: .8rem; font-weight: normal; }
 .muted { color: var(--muted); }
 .small { font-size: .85rem; }
@@ -80,7 +115,7 @@ table.data th, table.data td { text-align: left; padding: .35rem .4rem; border-b
 table.data th { color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .02em; }
 table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.data tr.total td { font-weight: 600; border-top: 2px solid var(--text); }
-.badge { display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-size: .75rem; background: var(--accent-soft); color: var(--accent); }
+.badge { display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-size: .75rem; background: var(--accent-soft); color: var(--accent-text); }
 .warning { border-left: 3px solid var(--warn); background: var(--warn-soft); padding: .4rem .6rem; border-radius: 4px; margin: .3rem 0; font-size: .88rem; }
 .warning.error { border-color: var(--danger); background: #fdecec; }
 .warning.info { border-color: var(--accent); background: var(--accent-soft); }
@@ -104,6 +139,8 @@ table.data tr.total td { font-weight: 600; border-top: 2px solid var(--text); }
 .kpi .label { color: var(--muted); font-size: .78rem; }
 .empty { color: var(--muted); padding: 1rem; text-align: center; border: 1px dashed var(--border); border-radius: 6px; }
 .sr-only { position: absolute; left: -9999px; }
+.length-input { flex-wrap: wrap; }
+.length-input .field-hint { flex-basis: 100%; }
 
 @media print {
   body { background: #fff; }
@@ -122,7 +159,7 @@ table.data tr.total td { font-weight: 600; border-top: 2px solid var(--text); }
 @media (max-width: 1000px) { .shape-layout { grid-template-columns: 1fr; } }
 .shape-preview { position: sticky; top: .5rem; }
 .mode-toggle { display: flex; gap: .4rem; flex-wrap: wrap; margin: .4rem 0 .6rem; }
-.mode-toggle button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.mode-toggle button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
 .presets { display: flex; gap: .4rem; flex-wrap: wrap; margin: .5rem 0; }
 .figures { display: flex; gap: .5rem 1.25rem; flex-wrap: wrap; margin-top: .6rem; padding: .5rem .6rem; border: 1px solid var(--border); border-radius: 6px; font-size: .88rem; color: var(--muted); }
 .figures b { color: var(--text); font-weight: 600; }
@@ -151,9 +188,10 @@ table.data td .checkbox { margin: 0; }
 .stairs-table td { white-space: nowrap; }
 .stairs-table .stairs-step-actions { display: flex; gap: .25rem; }
 .stairs-th-note { text-transform: none; letter-spacing: 0; font-weight: normal; }
-.badge.warn { background: var(--warn-soft); color: var(--warn); }
-.badge.ok { background: #e6f4ea; color: var(--ok); }
-.stairs-pitch-warn { color: var(--warn); font-weight: 600; }
+.badge.warn { background: var(--warn-soft); color: var(--warn-text); }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.stairs-pitch-warn { color: var(--warn-text); font-weight: 600; }
+.stairs-issue { color: var(--warn-text); font-size: .8rem; display: block; white-space: normal; max-width: 22rem; }
 .stairs-summary { margin: 0; font-weight: 600; }
 .stairs-preview { display: flex; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
 .stairs-figure { margin: 0; display: flex; flex-direction: column; gap: .25rem; }
@@ -200,7 +238,7 @@ table.data td .checkbox { margin: 0; }
 .floorplan-panel .mode-panel p { margin: 0; }
 .floorplan-panel .mode-panel .field { margin-bottom: 0; }
 .floorplan-panel .mode-panel .figures { margin-top: 0; }
-.scale-status { margin: .25rem 0 .5rem; padding: .35rem .6rem; border-left: 3px solid var(--ok); background: #e6f4ea; border-radius: 4px; }
+.scale-status { margin: .25rem 0 .5rem; padding: .35rem .6rem; border-left: 3px solid var(--ok); background: var(--ok-soft); border-radius: 4px; }
 .floorplan-view .zoom-controls { margin-bottom: .35rem; }
 .zoom-readout { min-width: 3.2rem; text-align: center; font-variant-numeric: tabular-nums; }
 .floorplan-stage { position: relative; }
@@ -254,7 +292,13 @@ table.data td .checkbox { margin: 0; }
 .offcut-list .badge { margin-left: .25rem; }
 .compare-table th[scope='row'] { font-weight: 600; white-space: nowrap; }
 .compare-table th[scope='row'] .badge { margin-left: .35rem; font-weight: normal; }
-.compare-table tr.compare-best { background: #e6f4ea; }
+.compare-table tr.compare-best { background: var(--ok-soft); }
+.roll-cut-legend { display: flex; flex-wrap: wrap; gap: .3rem .9rem; margin: .25rem 0 0; padding: 0; list-style: none; font-size: .8rem; color: var(--muted); }
+.roll-cut-legend li { display: inline-flex; align-items: center; gap: .3rem; }
+.roll-cut-legend .swatch { width: .9rem; height: .9rem; border-radius: 2px; border: 1px solid #7a5c3a; background: var(--carpet); display: inline-block; }
+.roll-cut-legend .swatch.fill { background: #dcc3a4; }
+.roll-cut-legend .swatch.stair { background: #b9d7b5; border-color: #4c7a46; }
+.roll-cut-legend .swatch.offcut { background: repeating-linear-gradient(45deg, #f1f1f1, #f1f1f1 3px, #ccc 3px, #ccc 5px); border-color: #bbb; }
 
 /* room / staircase cards on the full page */
 .results-rooms .result-card, .results-stairs .result-card { margin-top: .75rem; }
@@ -271,6 +315,18 @@ table.data td .checkbox { margin: 0; }
 .result-lines-list { margin: .35rem 0 0 1.1rem; padding: 0; }
 .result-notes { margin: .35rem 0 0; }
 
+/* quote details: who and when the estimate is for */
+.quote-details { margin-bottom: .75rem; }
+.quote-details summary { cursor: pointer; color: var(--accent-text); }
+.quote-details textarea { width: 100%; resize: vertical; }
+.quote-details input[type='text'], .quote-details input[type='date'] { width: 100%; }
+.quote-header { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .4rem 1rem; margin: 0 0 .75rem; padding-bottom: .6rem; border-bottom: 1px solid var(--border); }
+.quote-header dt { color: var(--muted); font-size: .78rem; }
+.quote-header dd { margin: 0; font-weight: 600; }
+.quote-notes { margin-top: .75rem; padding-top: .6rem; border-top: 1px solid var(--border); }
+.quote-notes h4 { margin-bottom: .2rem; }
+.quote-notes p { margin: 0; white-space: pre-wrap; }
+
 /* bill of materials */
 .bom-table tr.bom-category th { background: var(--bg); text-transform: none; letter-spacing: 0; font-size: .85rem; color: var(--text); }
 .bom-table tr.bom-subtotal td { color: var(--muted); font-size: .85rem; }
@@ -282,8 +338,9 @@ table.data td .checkbox { margin: 0; }
 .warnings-flat button.link { margin-top: .25rem; }
 
 @media print {
-  /* the Estimate tab renders the full estimate in the main column, which the base print rules hide */
-  .layout > .main-column:has(> .results-expanded) { display: block !important; }
+  /* the Estimate tab renders the full estimate in the main column, which the base print rules hide.
+     A class set by App, not `:has()`: browsers without `:has()` printed a blank page. */
+  .layout-results > .main-column { display: block !important; }
   .results-expanded .panel { border: none; padding: 0; }
   .results-expanded .panel + .panel { margin-top: .75rem; }
   .results-panel .no-print { display: none !important; }

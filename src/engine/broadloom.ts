@@ -15,6 +15,7 @@
  */
 import type { Mm, Polygon, CutPiece, Seam, Doorway, Id, Warning, BroadloomProduct, BroadloomPlanningOptions } from './types';
 import { verticalSlabs, extentOverRange, transpose, doorwaySegment, type Slab } from './geometry';
+import { VINYL_MIN_FILL_WIDTH } from './defaults';
 
 export interface RoomPlanInput {
   roomId: Id;
@@ -47,8 +48,51 @@ interface Group {
 
 const BAD_SEAM_PENALTY = 1e12; // mm² — dominates any real area so doorway seams are a last resort
 
+/**
+ * What one extra seam is "worth" in the dynamic programme, as an area (mm²) added to the cost of
+ * every piece after the first.
+ *
+ * The DP used to minimise piece area alone, which put a seam anywhere it saved a square millimetre.
+ * That is not how a floor is cut: a seam costs tape, time, and a visible line for the life of the
+ * carpet, so a fitter only seams a room when it saves real material. Under 'balanced' a seam must
+ * therefore pay for itself by `balancedThresholdM2` of carpet (the same threshold the cross-join
+ * rule already used); under 'min_waste' material is the only objective, so seams are free; under
+ * 'min_seams' the comparison is lexicographic on piece count anyway and the penalty just reinforces it.
+ */
+export function seamPenaltyMm2(options: BroadloomPlanningOptions): number {
+  switch (options.seamPolicy) {
+    case 'min_waste':
+      return 0;
+    case 'min_seams':
+      return BAD_SEAM_PENALTY;
+    default:
+      return Math.max(0, options.balancedThresholdM2) * 1e6;
+  }
+}
+
+/**
+ * The narrowest fill this product may be planned with. A 300 mm sliver is already marginal in
+ * carpet; in sheet vinyl it is not fittable at all (it curls, and the joint has to be welded), so
+ * vinyl gets a 600 mm floor.
+ */
+export function minFillWidthFor(product: Pick<BroadloomProduct, 'kind'>, options: BroadloomPlanningOptions): Mm {
+  const base = options.minFillWidth ?? 300;
+  return product.kind === 'sheet_vinyl' ? Math.max(base, VINYL_MIN_FILL_WIDTH) : base;
+}
+
 export function planRoom(input: RoomPlanInput): RoomPlan {
   const { options, rollWidth, product } = input;
+  // `!(x > 0)` also rejects NaN. The candidate-seam search below steps in multiples of the roll
+  // width, so a zero or negative width would never terminate; this is a hard stop, not a warning.
+  if (!(rollWidth > 0)) {
+    return {
+      pileDirection: input.pileDirection,
+      pieces: [],
+      seams: [],
+      warnings: [{ level: 'error', code: 'INVALID_ROLL_WIDTH', message: `${input.roomName}: the roll width must be greater than zero (got ${rollWidth} mm) — check the product.`, subjectId: input.roomId }],
+      pieceAreaMm2: 0,
+    };
+  }
   // Orient: we want the pile along +y. If pile is along the room's length (x), transpose.
   const oriented = input.pileDirection === 'along_length' ? transpose(input.polygon) : input.polygon;
   const slabs = verticalSlabs(oriented);
@@ -62,7 +106,8 @@ export function planRoom(input: RoomPlanInput): RoomPlan {
 
   // usable width of a piece that needs a trimming allowance on both sides
   const usable = Math.max(1, rollWidth - options.widthAllowance);
-  const minFill = options.minFillWidth ?? 300;
+  const minFill = minFillWidthFor(product, options);
+  const seamPenalty = seamPenaltyMm2(options);
 
   // ---- candidate seam positions --------------------------------------------------------------
   const cand = new Set<number>();
@@ -76,6 +121,7 @@ export function planRoom(input: RoomPlanInput): RoomPlan {
     addCand(b + minFill);
     addCand(b - minFill);
     for (const w of [rollWidth, usable]) {
+      if (!(w > 0)) continue; // belt and braces: a non-positive step would loop forever
       for (let k = 1; k * w < span + w; k++) {
         addCand(b + k * w);
         addCand(b - k * w);
@@ -112,6 +158,7 @@ export function planRoom(input: RoomPlanInput): RoomPlan {
       const pieceWidth = Math.min(w + options.widthAllowance, rollWidth);
       const pieceLength = ext.y1 - ext.y0 + options.lengthAllowance;
       let cost = pieceWidth * pieceLength;
+      if (i > 0) cost += seamPenalty; // this piece starts at a seam
       if (j < n - 1 && isBad(xj)) cost += BAD_SEAM_PENALTY;
       const pieces = bestPieces[i]! + 1;
       const total = bestCost[i]! + cost;
@@ -146,6 +193,14 @@ export function planRoom(input: RoomPlanInput): RoomPlan {
   const repeatL = product.patternRepeatLength ?? 0;
   const repeatW = product.patternRepeatWidth ?? 0;
   let pieceArea = 0;
+  // The MAIN piece is the widest one — the drop that covers most of the floor — not simply the
+  // first: a room whose left-hand strip is the narrow one used to label a 1.7 m sliver "Main piece"
+  // and the 3 m drop beside it "Fill 1".
+  let mainIdx = 0;
+  groups.forEach((g, idx) => {
+    if (g.x1 - g.x0 > groups[mainIdx]!.x1 - groups[mainIdx]!.x0 + 1e-6) mainIdx = idx;
+  });
+  let fillNo = 0;
   groups.forEach((g, idx) => {
     const spanW = g.x1 - g.x0;
     const fullWidth = spanW + options.widthAllowance >= rollWidth - 1e-6;
@@ -153,7 +208,8 @@ export function planRoom(input: RoomPlanInput): RoomPlan {
     let length = g.y1 - g.y0 + options.lengthAllowance;
     if (repeatL > 0 && idx > 0) length += repeatL; // every additional piece needs a repeat to match
     if (repeatW > 0 && !fullWidth) width = Math.min(Math.ceil(width / repeatW) * repeatW, rollWidth);
-    const isMain = idx === 0 || spanW >= (groups[0]!.x1 - groups[0]!.x0) - 1e-6;
+    const isMain = idx === mainIdx;
+    if (!isMain) fillNo += 1;
     const placementOriented: Polygon = [
       { x: g.x0, y: g.y0 },
       { x: g.x1, y: g.y0 },
@@ -165,10 +221,10 @@ export function planRoom(input: RoomPlanInput): RoomPlan {
       id: `${input.roomId}:p${idx + 1}`,
       ownerId: input.roomId,
       ownerName: input.roomName,
-      label: groups.length === 1 ? 'Main piece' : isMain && idx === 0 ? 'Main piece' : `Fill ${idx}`,
+      label: isMain ? 'Main piece' : `Fill ${fillNo}`,
       length,
       width,
-      role: groups.length === 1 || (isMain && idx === 0) ? 'main' : 'fill',
+      role: isMain ? 'main' : 'fill',
       placement: { polygon: placement },
     });
     pieceArea += length * width;

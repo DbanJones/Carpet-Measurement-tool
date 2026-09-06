@@ -36,9 +36,31 @@ metres and the ordered area, and shows the waste that the roll width forces.
 | `lengthAllowance`, `widthAllowance` | 100 mm each | "Add 10 cm to each dimension": the carpet runs ~5 cm up each wall and is trimmed in place, covering out-of-square walls. Sources range 50–150 mm. **[V]** |
 | `minFillWidth` | 300 mm | Never plan a sliver: professional estimating software keeps a 1 ft minimum fill because narrower strips cannot be seamed and stretched properly. The seam moves so both pieces are practical. **[L]** |
 | `maxCrossJoinsPerFill` | 2 | A fill may be at most three strips joined end to end, mirroring the "maximum allowed T-seams" cap in trade software. **[L]** |
-| `balancedThresholdM2` | 1.0 m² | In *balanced* mode a cross join is only accepted if it saves at least this much carpet, so seams are not added to save a scrap. **[U]** |
+| `balancedThresholdM2` | 1.0 m² | What ONE seam has to be worth. In *balanced* mode a seam — side or cross — is only cut if it saves at least this much carpet, so seams are never added to save a scrap. **[U]** |
 | `usableOffcutMin` | 500 mm | Offcuts smaller than 0.5 m either way are reported as waste rather than as usable remnants. **[U]** |
 | `minCrossJoinStripLength` | 600 mm | Below this a cross-joined segment is not worth cutting. **[U]** |
+| `VINYL_MIN_FILL_WIDTH` | 600 mm | Sheet vinyl only. A 300 mm strip of cushioned vinyl curls, will not roll flat into an adhesive bed and puts a seam a footstep from the wall, so vinyl gets twice carpet's minimum fill. **[L]** |
+| `VINYL_ALLOWS_CROSS_JOINS` | `false` | Sheet vinyl is never cross-joined. A butt joint across a kitchen or bathroom floor is a route for water under the sheet and cannot be welded flat the way a side seam can, so no saving buys one. **[V]** |
+| `DEFAULT_CARPET_THICKNESS` / `DEFAULT_VINYL_THICKNESS` | 10 mm / 2.5 mm | Assumed build-up of a covering whose thickness was not entered, used to decide whether the new floor is thicker than the old one (which drives the door-easing recommendation). **[L]** |
+
+**A seam has to pay for itself.** The planner scores a plan by the LINEAR METRES it takes off the
+roll, then by seams, then by piece area — not by piece area alone. A seam that leaves the order the
+same length buys nothing but tape, time and a line down the floor for the life of the carpet, so it
+is never cut: under *balanced* every seam is charged `balancedThresholdM2` against the material it
+saves, and under *min seams* the fewest-piece plan always wins. The same rule applies to cross
+joins, per join rather than per run. **[V]**
+
+**Pile direction is chosen for the roll, not the room.** Each room starts on the direction that is
+cheapest planned on its own, then the whole roll is re-packed while turning one room at a time for
+as long as the combined length keeps falling. A landing that packs beside the hall one way and opens
+a whole new cut the other is worth 2 m of carpet, and no per-room decision can see that. **[U]**
+
+**Over-runs.** Whole units — packs of laminate, rolls of underlay, packs of gripper, lengths of
+beading — round UP, except when the requirement overruns the last unit by less than
+`OVER_RUN_TOLERANCE` (3%, `src/engine/accessories.ts`). 4.02 rolls of underlay is four rolls and
+0.22 m made up out of the offcuts, not a whole fifth 15 m² roll to supply 219 mm; 3.008 packs of
+laminate is three packs, not four (which would be 42% more material than the floor). The quote says
+in the line note exactly how much is being made up. **[L]**
 
 Measure at the **longest and widest points**, into bays, alcoves and doorways (to the centre of the
 closed door), and ignore chimney breasts and other obstructions — the fitter cuts around them. The
@@ -77,7 +99,8 @@ with a 223 mm going at 860 mm wide (800 mm practical minimum in England, 900 mm 
 | `BULLNOSE_WRAP_FACTOR` / `BULLNOSE_WRAP_TUCK` | 1.6 × projection + 50 mm | The band follows the curve of the round end: π/2 ≈ 1.571 of the radius for a quarter-round, taken to 1.6 with a tuck each end. **[L]** |
 | `RUNNER_END_ALLOWANCE` | 300 mm | Once per continuous (waterfall) run, for the tuck at the top and the finish at the bottom. **[L]** |
 | `RUNNER_DEFAULT_WIDTH` | 600 mm | UK runners are sold 600/700/850/900 mm wide; a 5–15 cm reveal each side of an 860 mm stair suits 600–700 mm. **[V]** |
-| `GRIPPER_PER_STEP` | 2 | One length across the back of the tread, one at the foot of the riser. **[V]** |
+| `GRIPPER_PER_STEP` | 2 | One length across the back of the tread, one at the foot of the riser. The TOP step is the exception: its tread is the landing, so only its riser foot is gripped (one length), and a winder's long back edge takes one more. **[V]** |
+| `PAD_NOSING_OVERLAP` | 50 mm | Underlay pads go on the TREADS only — the risers are left bare so the carpet pulls tight against them — with the pad running about 50 mm over the nose where the foot lands. `Staircase.underlayRisers` switches to a continuous pad down the whole flight for a waterfall build-up. **[V]** |
 | `MAX_UNDERLAY_THICKNESS_ON_STAIRS` | 10 mm | Thicker underlay will not sit over a nosing; 8 mm dense (heavy domestic) is the usual choice. Sources say 9–10 mm. **[V]** |
 
 **Per step** the carpet wraps rise + going + nosing. The **top step has no going** — its tread is the
@@ -125,8 +148,16 @@ existing gripper can often be reused — the tool says so rather than silently c
 
 Door bar type comes from the transition, not from a menu: carpet→carpet takes a double-sided bar,
 carpet→hard floor a single-edge, hard→same-level-hard a T-bar, hard→different height a ramp, and a
-floor running out to a doorstep an end profile. A doorway entered from both of its rooms is counted
-**once**, so a whole-house job does not order two bars per door.
+floor running out to a doorstep an end profile.
+
+A door between two rooms is measured from **both** of them — each room's gripper has to stop at it —
+but there is one leaf and one bar to buy. The two entries are joined by an explicit
+`Doorway.sharedOpeningId` (the "Shared with" column in the doorway editor), and the opening is then
+counted once for the bar AND once for the door easing. Identity is never guessed from the label:
+"Door", "Doorway" and "Door to landing" are exactly what people type, so matching on text would buy
+one bar for two different doorways in different rooms — a bar short on site — or two bars for one
+opening described differently from each side. Where the two sides were measured at different widths
+the wider is used and the difference is reported.
 
 ## 6. Floor preparation
 
@@ -135,6 +166,7 @@ floor running out to a doorstep an end profile. A doorway entered from both of i
 | `latexBagCoverageM2PerMm` | 13 m²·mm/bag | Smoothing compound consumes 1.5–1.65 kg/m²/mm, so a 20 kg bag covers about 4.3 m² at 3 mm. **[V]** |
 | `latexThickness` | 3 mm | The nominal skim under vinyl and LVT, and over a ply overlay; 5 mm over a poor subfloor. **[V]** |
 | `primerCoverageM2PerLitre` | 20 m²/L | Acrylic primer concentrate diluted about 1:4 on porous floors: a 5 L can covers ~100 m². Neat on dense surfaces roughly halves it. **[L]** |
+| `primerCanLitres` | 5 L | Primer is sold in sealed cans, so the quote orders whole CANS: 0.8 L of primer is still one can and one price. **[V]** |
 | `plySheet` | 2440 × 1220 mm, 6 mm | Flooring-grade (BS EN 636-2) overlay under resilient coverings on timber; 9–12 mm where boards are badly cupped. **[V]** |
 | `plyScrewsPerSheet` | 150 | Screws or 25 mm ring-shank nails at 150 mm centres both ways (17 × 9 on a full sheet). **[L]** |
 | `hardboardSheet` | 1220 × 610 mm, 3.2 mm | Under carpet only — never under vinyl or LVT — and conditioned with water 24–48 h before fixing. **[V]** |
@@ -178,6 +210,24 @@ uplift £2–6/m² by covering and disposal £2–4/m²; smoothing compound £5�
 £4–13 material or £12–18 supplied and fitted; stair rods £9–32 each; laminate stair nosings £15–45.
 VAT is applied at 20% and can be turned off for a trade price.
 
+**Nothing required is left unpriced.** Every item the estimate says must happen either carries a
+price of its own or names the labour line that prices it. Gripper removal, board preparation,
+skirting off and back and the hygrometer test each have a rate; hard-floor underlay, primer cans and
+vinyl seam weld each have a material price; acclimatisation is marked "no charge — allow the time in
+the programme".
+
+**Minimum job charge.** `minimumJobLabour` (£180) is the least labour a visit is charged. Pure £/m²
+rates under-quote a small room badly — a 2.2 × 1.9 m bathroom in glue-down LVT over a new ply
+overlay is most of a day and prices at about £155 — so the shortfall is added as its own line that
+says why. It is a JOB minimum, not a room minimum: at £5/m² carpet a per-room minimum would put a
+minimum charge on every room under 30 m² of a whole-house job, which no fitter charges. UK minimum
+call-out / visit charges are typically £150–£200. **[L]**
+
+**Gripper is quoted the way it is bought.** With `gripperPerPack` above one the line quantity, unit
+and price are all per pack (`gripperPerPack` price); the note gives the metres, the lengths and how
+many are spare. The per-length price is used only where the pack size is one. The line used to quote
+63 lengths at the per-length price and then tell the reader to buy 7 packs of 10.
+
 ## 9. Where the sources disagreed
 
 The research surfaced two dozen genuine conflicts between retailers, fitters' guides and trade
@@ -205,7 +255,154 @@ software. The ones that change a number are resolved as follows.
 - **Minimum cut length.** No major UK chain publishes one, so it is left unset per product rather
   than assumed.
 
-## 10. What the tool deliberately does not do
+## 10. Appendix: every default at a glance
+
+Values as shipped in `src/engine/defaults.ts`. All of them are editable in the app.
+
+### Constants
+
+| Name | Value |
+|---|---|
+| `CARPET_ROLL_WIDTHS` | `[4000, 5000]` mm |
+| `CARPET_ROLL_WIDTHS_OTHER` | `[3660, 4570, 2000, 3000]` mm |
+| `VINYL_ROLL_WIDTHS` | `[2000, 3000, 4000]` mm |
+| `CARPET_MAX_ROLL_LENGTH` | 30 000 mm |
+| `VINYL_MAX_ROLL_LENGTH` | 20 000 mm |
+| `CUT_INCREMENT` | 100 mm |
+| `DEFAULT_CARPET_THICKNESS` | 10 mm |
+| `DEFAULT_VINYL_THICKNESS` | 2.5 mm |
+| `VINYL_MIN_FILL_WIDTH` | 600 mm |
+| `VINYL_ALLOWS_CROSS_JOINS` | `false` |
+| `UNDERLAY_ROLL_LENGTHS` | `[11000, 15000]` mm |
+| `MAX_TOG_WITH_UFH` | 2.5 tog |
+| `MAX_UNDERLAY_THICKNESS_ON_STAIRS` | 10 mm |
+| `GRIPPER_TRADE_BOX` | 100 lengths |
+| `UK_DOOR_WIDTHS` | `[610, 686, 762, 838, 914, 726, 826, 926]` mm |
+| `DEFAULT_DOOR_WIDTH` | 838 mm |
+| `MAX_SUBFLOOR_RH_RESILIENT` | 75 % RH |
+| `MAX_SUBFLOOR_RH_WOOD` | 65 % RH |
+| `LAY_PATTERN_WASTAGE` | straight 0.07, random_stagger 0.07, brick 0.08, diagonal 0.15, herringbone 0.20, chevron 0.20 |
+| `BEADING_WASTAGE` | 0.10 |
+| `LVT_ADHESIVE_M2_PER_KG` / `LVT_ADHESIVE_TUB_KG` | 4 m²/kg / 15 kg |
+| `TACKIFIER_M2_PER_LITRE` / `TACKIFIER_TUB_LITRES` | 7 m²/L / 5 L |
+| `CARPET_TILE_SIZE` / `CARPET_TILES_PER_BOX` / `CARPET_TILE_WASTAGE` | 500 mm / 20 / 0.07 |
+| `VINYL_ADHESIVE_M2_PER_KG` / `VINYL_ADHESIVE_TUB_KG` | 4 m²/kg / 15 kg |
+| `DEFAULT_STEP` | straight, rise 200, going 223, width 860 mm |
+| `STAIR_REGS` | rise 150–220, going 220–300 mm, pitch ≤ 42° |
+| `DEFAULT_NOSING_OVERHANG` | 20 mm |
+| `STEP_LENGTH_ALLOWANCE` | 30 mm |
+| `CAP_AND_BAND_EXTRA` | 75 mm |
+| `STEP_WIDTH_ALLOWANCE` | 100 mm |
+| `OPEN_SIDE_WRAP` | 150 mm per open side |
+| `BULLNOSE_WRAP_FACTOR` / `BULLNOSE_WRAP_TUCK` | 1.6 / 50 mm |
+| `RUNNER_END_ALLOWANCE` | 300 mm |
+| `RUNNER_DEFAULT_WIDTH` | 600 mm |
+| `GRIPPER_PER_STEP` | 2 lengths |
+| `PAD_NOSING_OVERLAP` | 50 mm |
+| `PLY_SCREWS_PER_BOX` | 200 |
+| `CARPET_PRICE_TIERS` | budget £8, mid £18, premium £35 per m² |
+
+Two more supply rules live beside the code that uses them rather than in `defaults.ts`:
+`OVER_RUN_TOLERANCE` (0.03) and `UNDERLAY_PAD_WASTAGE` (0.10) in `src/engine/accessories.ts`,
+`STAIR_HARD_FLOOR_WASTAGE` (0.15) in `src/engine/stairs.ts`, and
+`VINYL_FULLY_BONDED_MIN_AREA_M2` (20 m²) in `src/engine/estimate.ts`.
+
+### `DEFAULT_BROADLOOM_OPTIONS`
+
+| Key | Value |
+|---|---|
+| `pileDirection` | `auto` |
+| `seamPolicy` | `balanced` |
+| `lengthAllowance` / `widthAllowance` | 100 mm / 100 mm |
+| `balancedThresholdM2` | 1.0 m² per seam |
+| `minCrossJoinStripLength` | 600 mm |
+| `usableOffcutMin` | 500 mm |
+| `minFillWidth` | 300 mm |
+| `maxCrossJoinsPerFill` | 2 |
+
+### `DEFAULT_UNDERLAY`
+
+| Key | Value |
+|---|---|
+| `fit` | `true` |
+| `rollWidth` / `rollLength` | 1370 mm / 11 000 mm |
+| `thickness` | 10 mm |
+| `tog` | 2.3 |
+| `pricePerRoll` | £75 |
+
+### `DEFAULT_ACCESSORIES`
+
+| Key | Value |
+|---|---|
+| `gripperLength` | 1520 mm |
+| `gripperPerPack` | 10 |
+| `gripperWastage` | 0.10 |
+| `doorBarLength` / `doorBarLongLength` | 900 mm / 2700 mm |
+| `seamTapeRollLength` | 20 000 mm |
+| `doubleSidedTapeRollLength` | 25 000 mm |
+| `underlayTapeRollLength` | 50 000 mm |
+
+### `DEFAULT_FLOOR_PREP`
+
+| Key | Value |
+|---|---|
+| `latexThickness` | 3 mm |
+| `latexBagCoverageM2PerMm` | 13 m²·mm per bag |
+| `latexWastage` | 0.10 |
+| `primerCoverageM2PerLitre` | 20 m²/L |
+| `primerCoats` | 1 |
+| `primerCanLitres` | 5 L |
+| `plySheetLength` / `plySheetWidth` | 2440 mm / 1220 mm |
+| `plyWastage` | 0.10 |
+| `plyScrewsPerSheet` | 150 |
+| `hardboardSheetLength` / `hardboardSheetWidth` | 1220 mm / 610 mm |
+| `liquidDpmCoverageM2PerKg` | 1.65 m²/kg |
+| `dpmSheetRollAreaM2` | 100 m² |
+| `dpmOverlap` | 0.15 |
+
+### `DEFAULT_HARD_FLOOR`
+
+| Key | Value |
+|---|---|
+| `layPattern` | `straight` |
+| `expansionGap` | 10 mm |
+| `useBeading` | `true` |
+| `beadingLength` | 2400 mm |
+| `underlayPackCoverageM2` | 15 m² |
+| `underlayHasDpm` | `true` |
+
+### `DEFAULT_PRICES` (GBP, VAT 20 %, applied)
+
+Labour:
+
+| Key | Value | Key | Value |
+|---|---|---|---|
+| `carpetFittingPerM2` | £5.00 | `doorEasingPerDoor` | £15.00 |
+| `vinylFittingPerM2` | £7.00 | `bindingPerM` | £6.50 |
+| `laminateFittingPerM2` | £12.00 | `minimumJobLabour` | £180.00 |
+| `lvtFittingPerM2` | £18.00 | `gripperRemovalPerM` | £1.50 |
+| `stairsPerStep` | £12.00 | `boardPrepPerM2` | £4.00 |
+| `upliftPerM2` | £2.00 | `skirtingRefitPerM` | £6.00 |
+| `disposalPerM2` | £3.00 | `moistureTestPerTest` | £25.00 |
+| `latexPerM2` | £7.50 | `plyPerM2` | £14.00 |
+
+Materials:
+
+| Key | Value | Key | Value |
+|---|---|---|---|
+| `gripperPerLength` | £1.20 | `underlayTapePerRoll` | £5.00 |
+| `gripperPerPack` | £11.00 | `hardFloorUnderlayPerPack` | £22.00 |
+| `doorBarPerBar` | £8.00 | `beadingPerLength` | £6.00 |
+| `latexPerBag` | £20.00 | `thresholdPerItem` | £15.00 |
+| `primerPerCan` | £30.00 | `stairNosingPerItem` | £30.00 |
+| `plyPerSheet` | £20.00 | `stairRodPerItem` | £15.00 |
+| `hardboardPerSheet` | £8.00 | `adhesivePerTub` | £45.00 |
+| `liquidDpmPerKg` | £12.00 | `tackifierPerTub` | £30.00 |
+| `dpmSheetPerRoll` | £30.00 | `plyScrewsPerBox` | £8.00 |
+| `seamTapePerRoll` | £10.00 | `vinylSeamWeldPerM` | £3.00 |
+| `doubleSidedTapePerRoll` | £8.00 | | |
+
+## 11. What the tool deliberately does not do
 
 - **Read a floor plan automatically.** Estate-agent plans carry a "not to scale, illustrative only"
   disclaimer and are drawn to about ±2% of area and ±50 mm a wall. Automatic room detection would
@@ -216,3 +413,10 @@ software. The ones that change a number are resolved as follows.
 - **Replace a site visit.** Its warnings say when a measurement needs confirming — a tight roll
   width, a seam forced through a doorway, an unknown damp-proof membrane, stairs outside the
   Building Regulations, underlay too thick for a nosing.
+- **Allow for the carpet running out into the doorways.** `lengthAllowance` and `widthAllowance` add
+  100 mm to each dimension (50 mm of trim at each end). The room outline stops at the wall face, so
+  nothing extra is added for the covering running out to the middle of a door bar — another 50–100 mm
+  at each opening. Raise the allowances, or measure into the doorways, on a job with several
+  openings on one wall.
+- **Undo.** Actions that replace the whole project confirm first, and so do the row deletes that
+  discard a measured value, but there is no history. Save the file before a big change.

@@ -81,9 +81,9 @@ describe('ResultsPanel (compact)', () => {
   it('shows the headline figures for the sample house', () => {
     render(<ResultsPanel />);
     expect(screen.getByTestId('kpi-net-area').textContent).toBe('84.04 m²');
-    expect(screen.getByTestId('kpi-materials').textContent).toBe('£2,737.40');
-    expect(screen.getByTestId('kpi-labour').textContent).toBe('£1,252.48');
-    expect(screen.getByTestId('kpi-total').textContent).toBe('£4,787.86');
+    expect(screen.getByTestId('kpi-materials').textContent).toBe('£2,751.60');
+    expect(screen.getByTestId('kpi-labour').textContent).toBe('£1,318.33');
+    expect(screen.getByTestId('kpi-total').textContent).toBe('£4,883.92');
     expect(screen.getByText('Total inc VAT')).toBeTruthy();
     // the compact panel keeps the detail (waste, rolls) for the full page
     expect(screen.queryByTestId('kpi-waste')).toBeNull();
@@ -95,7 +95,7 @@ describe('ResultsPanel (compact)', () => {
     state().setProject(project);
     render(<ResultsPanel />);
     expect(screen.getByText('Subtotal (no VAT)')).toBeTruthy();
-    expect(screen.getByTestId('kpi-total').textContent).toBe('£3,989.88');
+    expect(screen.getByTestId('kpi-total').textContent).toBe('£4,069.93');
   });
 
   it('lists one line per roll plan and one per pack product', () => {
@@ -103,11 +103,11 @@ describe('ResultsPanel (compact)', () => {
     const rollLines = screen.getAllByTestId('compact-roll-line').map((li) => li.textContent ?? '');
     expect(rollLines).toHaveLength(4);
     const hall = rollLines.find((t) => t.includes('Hall, stairs & landing'));
-    expect(hall).toMatch(/4\.00 m: 6\.3 lm, 5 cuts, 1 seam, 47\.7% waste/);
+    expect(hall).toMatch(/4\.00 m: 6\.3 lm, 5 cuts, 0 seams, 47\.7% waste/);
 
     const packLines = screen.getAllByTestId('compact-pack-line').map((li) => li.textContent ?? '');
     expect(packLines).toHaveLength(2);
-    expect(packLines.some((t) => /^Oak effect laminate.*: 4 packs$/.test(t))).toBe(true);
+    expect(packLines.some((t) => /^Oak effect laminate.*: 3 packs$/.test(t))).toBe(true);
     expect(packLines.some((t) => /: 2 packs$/.test(t))).toBe(true);
   });
 
@@ -115,8 +115,8 @@ describe('ResultsPanel (compact)', () => {
     render(<ResultsPanel />);
     const list = screen.getByRole('list', { name: 'Warnings' });
     expect(within(list).getAllByRole('listitem')).toHaveLength(5);
-    // the sample house raises 17 notes
-    expect(screen.getByRole('button', { name: '12 more…' })).toBeTruthy();
+    // the sample house raises 19 notes
+    expect(screen.getByRole('button', { name: '14 more…' })).toBeTruthy();
   });
 
   it('switches to the Estimate tab from "Open full estimate"', () => {
@@ -131,13 +131,16 @@ describe('ResultsPanel (expanded)', () => {
   it('adds waste and rolls to the figures and groups every warning', () => {
     render(<ResultsPanel expanded />);
     expect(screen.getByTestId('kpi-net-area').textContent).toBe('84.04 m²');
-    expect(screen.getByTestId('kpi-total').textContent).toBe('£4,787.86');
+    expect(screen.getByTestId('kpi-total').textContent).toBe('£4,883.92');
     expect(screen.getByTestId('kpi-waste').textContent).toMatch(/^\d+\.\d%$/);
     expect(screen.getByTestId('kpi-rolls').textContent).toBe('4');
 
     const notes = screen.getByRole('list', { name: 'Notes' });
-    expect(within(notes).getAllByRole('listitem')).toHaveLength(17);
+    expect(within(notes).getAllByRole('listitem')).toHaveLength(18);
     expect(within(notes).getAllByText(/existing gripper/).length).toBeGreaterThan(0);
+    // one warning-level note among the eighteen information ones: the kitchen vinyl piece spans the
+    // full 3 m roll width with no trim, which the fitter has to check before ordering
+    expect(screen.getAllByText(/less than 50 mm trim/).length).toBeGreaterThan(0);
   });
 
   it('draws a cutting plan, its cuts and its offcuts for every roll good', () => {
@@ -185,7 +188,7 @@ describe('ResultsPanel (expanded)', () => {
     const bom = within(screen.getByTestId('bom-table'));
     expect(bom.getAllByText(/Carpet gripper, timber pin/).length).toBe(1);
     expect(bom.getAllByRole('row').length).toBeGreaterThan(40);
-    expect(screen.getByTestId('bom-grand-total').textContent).toMatch(/£4,787\.86/);
+    expect(screen.getByTestId('bom-grand-total').textContent).toMatch(/£4,883\.92/);
   });
 
   it('downloads a non-empty CSV of the bill of materials', async () => {
@@ -267,8 +270,9 @@ describe('ResultsPanel helpers', () => {
   it('formats a roll plan as one line', () => {
     const plan = estimate.rollPlans.find((p) => p.productId === 'prod-carpet-lounge')!;
     const product = project.products.find((p) => p.id === plan.productId);
-    expect(rollPlanSummary(plan, product, 'metric')).toBe('Lounge twist pile carpet (4 m) — 4.00 m: 5.4 lm, 1 cut, 2 seams, 17.0% waste');
-    expect(seamCount(plan)).toBe(2);
+    // the lounge comes out in ONE piece: the planner no longer seams a room for no saving
+    expect(rollPlanSummary(plan, product, 'metric')).toBe('Lounge twist pile carpet (4 m) — 4.00 m: 5.4 lm, 1 cut, 0 seams, 17.0% waste');
+    expect(seamCount(plan)).toBe(0);
     expect(formatLm(6300)).toBe('6.3 lm');
     expect(formatLm(6000)).toBe('6 lm');
   });
@@ -277,7 +281,7 @@ describe('ResultsPanel helpers', () => {
     const packs = packSummaries(estimate, project);
     expect(packs.map((p) => p.productId)).toEqual(['prod-laminate-oak', 'prod-lvt-bathroom']);
     expect(packs[0]!.name).toBe('Oak effect laminate 8 mm, 1285 x 192 mm');
-    expect(packs[0]!.quantity).toBe(4);
+    expect(packs[0]!.quantity).toBe(3);
     expect(packs[0]!.unit).toBe('pack');
   });
 
@@ -295,5 +299,52 @@ describe('ResultsPanel helpers', () => {
     expect(lines.length).toBe(estimate.bom.length + 6); // header + lines + materials/labour/subtotal/VAT/total
     expect(csv).toContain('Bedroom 1');
     expect(csv).toContain('Total (GBP)');
+  });
+});
+
+
+describe('the printed quote', () => {
+  it('carries the customer, site and date once they are entered, and the notes under the BOM', () => {
+    const project = sampleProject();
+    project.customer = 'Mrs A Patel';
+    project.siteAddress = '12 Elm Road, Sheffield';
+    project.quoteRef = 'Q-2026-014';
+    project.quoteDate = '2026-04-20';
+    project.notes = 'Price holds for 30 days. Furniture moved by the customer.';
+    state().setProject(project);
+    render(<ResultsPanel expanded />);
+    const header = screen.getByTestId('quote-header');
+    expect(header.textContent).toContain('Mrs A Patel');
+    expect(header.textContent).toContain('12 Elm Road, Sheffield');
+    expect(header.textContent).toContain('Q-2026-014');
+    expect(header.textContent).toContain('2026-04-20');
+    // once under the bill of materials as terms, and once in the editable field
+    expect(screen.getAllByText(/Price holds for 30 days/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: 'Notes and terms' })).toBeTruthy();
+  });
+
+  it('shows no quote header at all until something is entered', () => {
+    render(<ResultsPanel expanded />);
+    expect(screen.queryByTestId('quote-header')).toBeNull();
+    // the editor is there to fill in, and does not print
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'Mr B Jones' } });
+    expect(state().project.customer).toBe('Mr B Jones');
+    expect(screen.getByTestId('quote-header').textContent).toContain('Mr B Jones');
+  });
+
+  it('keys the cutting plan so the printed diagram can be read without the tooltips', () => {
+    render(<ResultsPanel expanded />);
+    const legends = screen.getAllByText('Main piece');
+    expect(legends.length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Fill piece').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Stairs / landing').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Offcut').length).toBeGreaterThan(0);
+  });
+
+  it('does not call a laminate room\'s perimeter a gripper perimeter', () => {
+    render(<ResultsPanel expanded />);
+    // the box room is laminate: it gets no gripper at all
+    expect(screen.getAllByText('Fixing / beading perimeter').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Gripper perimeter').length).toBeGreaterThan(0); // the carpet rooms
   });
 });

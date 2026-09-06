@@ -6,7 +6,7 @@
 import type { AccessoryOptions, BroadloomPlanningOptions, FloorPrepOptions, HardFloorOptions, LayPattern, PileDirection, SeamPolicy, UnderlayOptions } from '@engine/types';
 import { LAY_PATTERN_WASTAGE, MAX_TOG_WITH_UFH, MAX_UNDERLAY_THICKNESS_ON_STAIRS, PLY_SCREWS_PER_BOX } from '@engine/defaults';
 import { useProjectStore } from '@store/projectStore';
-import { Field, LengthInput, NumberInput, Section, Select, formatMoney } from '@ui/components/inputs';
+import { Field, FieldGroup, LengthInput, NumberInput, Section, Select, formatMoney } from '@ui/components/inputs';
 import { UNDERLAY_PRESETS } from './presets';
 import { CheckField, MmInput, MoneyInput, PercentInput } from './fields';
 
@@ -118,7 +118,9 @@ export function UnderlayOptionsEditor() {
   return (
     <Section title="Underlay" collapsible>
       <CheckField checked={u.fit} onChange={(fit) => set({ fit })} label="Fit underlay under carpet" hint="Untick for felt-backed or stick-down carpet; hard floors use their own underlay below." />
-      <Field label="Presets" hint="Common UK underlays; pick one then adjust the roll and price.">
+      {/* A row of buttons, so FieldGroup: a <label> forwards its activation to the first labelable
+          child, and clicking the caption would apply the first preset over six stored settings. */}
+      <FieldGroup label="Presets" hint="Common UK underlays; pick one then adjust the roll and price.">
         <span className="presets">
           {UNDERLAY_PRESETS.map((p) => (
             <button key={p.id} type="button" title={p.description} disabled={!u.fit} onClick={() => set(p.values)}>
@@ -126,7 +128,7 @@ export function UnderlayOptionsEditor() {
             </button>
           ))}
         </span>
-      </Field>
+      </FieldGroup>
       <div className="grid-2">
         <Field label="Roll width" hint="Carpet underlay is 1.37 m wide; laid across the pile direction.">
           <LengthInput value={u.rollWidth} unit={unit} min={100} ariaLabel="Underlay roll width" disabled={!u.fit} onChange={(rollWidth) => set({ rollWidth })} />
@@ -289,7 +291,7 @@ export function HardFloorOptionsEditor() {
         <Field label="Lay pattern" hint="Wastage grows with the pattern: straight 7%, diagonal 15%, herringbone and chevron 20%.">
           <Select value={h.layPattern} options={PATTERN_OPTIONS} ariaLabel="Lay pattern" onChange={(layPattern) => set({ layPattern })} />
         </Field>
-        <Field label="Wastage" hint={overriding ? `Overriding the pattern figure (${Math.round(patternWastage * 100)}%).` : `Using the pattern figure: ${Math.round(effective * 100)}% is added to the net area before packing.`}>
+        <FieldGroup label="Wastage" hint={overriding ? `Overriding the pattern figure (${Math.round(patternWastage * 100)}%).` : `Using the pattern figure: ${Math.round(effective * 100)}% is added to the net area before packing.`}>
           <span className="row">
             <PercentInput value={effective} ariaLabel="Hard floor wastage" onChange={(wastage) => set({ wastage })} />
             {overriding ? (
@@ -298,7 +300,7 @@ export function HardFloorOptionsEditor() {
               </button>
             ) : null}
           </span>
-        </Field>
+        </FieldGroup>
         <Field label="Expansion gap" hint="Gap left at every wall for the floor to move; 10 mm is standard, more in big rooms.">
           <MmInput value={h.expansionGap} ariaLabel="Expansion gap" onChange={(expansionGap) => set({ expansionGap })} />
         </Field>

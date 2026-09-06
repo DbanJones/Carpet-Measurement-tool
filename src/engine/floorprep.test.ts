@@ -19,7 +19,7 @@ import type { FloorPrepOptions, Subfloor, CoveringKind } from './types';
 /**
  * Test options chosen so the hand derivations below are easy to follow:
  * - latex: 20 kg bag = 13.5 m²·mm, 10 % wastage, 3 mm default
- * - primer: 6 m² per litre, one coat
+ * - primer: 6 m² per litre, one coat, sold in 5 L cans
  * - ply: 2440 x 1220 mm = 2.9768 m² per sheet, 10 % wastage, 120 screws per sheet, boxes of 200
  * - hardboard: 1220 x 610 mm = 0.7442 m² per sheet
  * - liquid DPM: 1.65 m² per kg; polythene: 100 m² rolls, 15 % overlap
@@ -30,6 +30,7 @@ const opts: FloorPrepOptions = {
   latexWastage: 0.1,
   primerCoverageM2PerLitre: 6,
   primerCoats: 1,
+  primerCanLitres: 5,
   plySheetLength: 2440,
   plySheetWidth: 1220,
   plyWastage: 0.1,
@@ -128,11 +129,13 @@ describe('rule table sanity', () => {
 describe('(1) 20 m² sheet vinyl on uneven concrete', () => {
   const p = plan([room('kitchen', 'sheet_vinyl', { type: 'concrete', condition: 'uneven' })]);
 
-  it('needs 4 L of primer: ceil(20 x 1 / 6) = ceil(3.333)', () => {
+  it('needs 1 can of primer: 20 x 1 / 6 = 3.333 L = 0.667 of a 5 L can -> 1 can', () => {
+    // primer is sold in sealed cans, so the quote orders cans: 0.8 L of primer is still one can
     const primer = item(p, 'primer')!;
-    expect(primer.quantity).toBe(4);
-    expect(primer.exactQuantity).toBe(3.3333);
-    expect(primer.unit).toBe('litre');
+    expect(primer.quantity).toBe(1);
+    expect(primer.exactQuantity).toBe(0.6667);
+    expect(primer.unit).toBe('can');
+    expect(primer.description).toBe('Primer, 5 L cans');
     expect(primer.required).toBe(true);
     expect(primer.ownerIds).toEqual(['kitchen']);
   });
@@ -185,8 +188,9 @@ describe('(2) 15 m² glue-down LVT on floorboards', () => {
     expect(skim.required).toBe(false);
     expect(skim.quantity).toBe(4);
     expect(skim.exactQuantity).toBe(3.6667);
-    expect(skim.reason).toBe('skim ply joints');
-    expect(skim.description).toBe(`Latex smoothing compound, ${PLY_SKIM_LATEX_THICKNESS} mm`);
+    expect(skim.reason).toContain('skim the new ply');
+    // the line says what is quantified: a 3 mm skim over the WHOLE floor, not a few metres of joint
+    expect(skim.description).toBe(`Latex smoothing compound (over ply overlay), ${PLY_SKIM_LATEX_THICKNESS} mm`);
   });
 
   it('boards in good condition need no securing or sanding, and there is no primer on ply', () => {
@@ -265,8 +269,8 @@ describe('(4) merging across rooms happens before rounding', () => {
     expect(latex.quantity).toBe(3);
     expect(latex.exactQuantity).toBe(2.4444);
     expect(latex.ownerIds).toEqual(['wc', 'utility']);
-    // primer: 10 m² / 6 = 1.667 -> 2 L
-    expect(item(p, 'primer')!).toMatchObject({ quantity: 2, exactQuantity: 1.6667, ownerIds: ['wc', 'utility'] });
+    // primer: 10 m² / 6 = 1.667 L = 0.333 of a 5 L can -> 1 can
+    expect(item(p, 'primer')!).toMatchObject({ quantity: 1, exactQuantity: 0.3333, ownerIds: ['wc', 'utility'] });
     expect(p.items).toHaveLength(2);
     expect(p.perRoom).toEqual({ wc: ['primer', 'latex'], utility: ['primer', 'latex'] });
   });
@@ -301,8 +305,8 @@ describe('(4) merging across rooms happens before rounding', () => {
       room('b', 'sheet_vinyl', { type: 'anhydrite' }, { areaM2: 10, doorwayCount: 0 }),
     ]);
     const primers = p.items.filter((i) => i.kind === 'primer');
-    expect(primers.map((x) => x.description).sort()).toEqual(['Primer', 'Primer (anhydrite-specific)']);
-    expect(primers.every((x) => x.quantity === 2)).toBe(true); // 10 / 6 = 1.667 -> 2 each
+    expect(primers.map((x) => x.description).sort()).toEqual(['Primer (anhydrite-specific), 5 L cans', 'Primer, 5 L cans']);
+    expect(primers.every((x) => x.quantity === 1)).toBe(true); // 10 / 6 = 1.667 L -> 1 can each
     expect(item(p, 'latex')!.ownerIds).toEqual(['a', 'b']);
   });
 
@@ -455,7 +459,7 @@ describe('click floors', () => {
   it('on uneven concrete: primer + latex required, citing 3 mm over 2 m', () => {
     const p = plan([room('lounge', 'laminate', { type: 'concrete', condition: 'uneven' }, { areaM2: 10, doorwayCount: 0 })]);
     expect(kinds(p)).toEqual(['primer', 'latex', 'acclimatise']);
-    expect(item(p, 'primer')!).toMatchObject({ quantity: 2, required: true }); // 10 / 6 = 1.667
+    expect(item(p, 'primer')!).toMatchObject({ quantity: 1, required: true }); // 10 / 6 = 1.667 L -> 1 can
     const latex = item(p, 'latex')!;
     expect(latex).toMatchObject({ quantity: 3, required: true }); // 10 x 1.1 x 3 / 13.5 = 2.444
     expect(latex.reason).toContain('3 mm over 2 m');
@@ -479,7 +483,7 @@ describe('special subfloors', () => {
   it('anhydrite needs a specific primer and a note about laitance', () => {
     const p = plan([room('k', 'sheet_vinyl', { type: 'anhydrite' })]);
     const primer = item(p, 'primer')!;
-    expect(primer.description).toBe('Primer (anhydrite-specific)');
+    expect(primer.description).toBe('Primer (anhydrite-specific), 5 L cans');
     expect(primer.reason).toContain('laitance');
     expect(item(p, 'latex')).toBeDefined();
   });
@@ -544,21 +548,21 @@ describe('edge cases', () => {
 
   it('a tiny 0.5 m² room still buys one litre and one bag', () => {
     const p = plan([room('wc', 'sheet_vinyl', { type: 'concrete' }, { areaM2: 0.5, doorwayCount: 0 })]);
-    expect(item(p, 'primer')!).toMatchObject({ quantity: 1, exactQuantity: 0.0833 }); // 0.5 / 6
+    expect(item(p, 'primer')!).toMatchObject({ quantity: 1, exactQuantity: 0.0167 }); // 0.5 / 6 / 5
     expect(item(p, 'latex')!).toMatchObject({ quantity: 1, exactQuantity: 0.1222 }); // 0.5 x 1.1 x 3 / 13.5
   });
 
-  it('a huge 500 m² poor slab: 204 bags at 5 mm and 84 L of primer', () => {
+  it('a huge 500 m² poor slab: 204 bags at 5 mm and 17 cans of primer', () => {
     const p = plan([room('hall', 'sheet_vinyl', { type: 'concrete', condition: 'poor' }, { areaM2: 500, perimeter: 90000, doorwayCount: 6 })]);
     // 500 x 1.1 x 5 / 13.5 = 203.70 -> 204 ; 500 / 6 = 83.33 -> 84
     expect(item(p, 'latex')!).toMatchObject({ quantity: 204, exactQuantity: 203.7037 });
-    expect(item(p, 'primer')!).toMatchObject({ quantity: 84, exactQuantity: 83.3333 });
+    expect(item(p, 'primer')!).toMatchObject({ quantity: 17, exactQuantity: 16.6667 }); // 83.33 L / 5
     expect(item(p, 'door_easing')!.quantity).toBe(6);
   });
 
-  it('two primer coats double the litres: 20 m² x 2 / 6 = 6.67 -> 7 L', () => {
+  it('two primer coats double the litres: 20 m² x 2 / 6 = 6.67 L = 1.33 cans -> 2 cans', () => {
     const p = plan([room('k', 'sheet_vinyl', { type: 'concrete' })], { primerCoats: 2 });
-    expect(item(p, 'primer')!).toMatchObject({ quantity: 7, exactQuantity: 6.6667 });
+    expect(item(p, 'primer')!).toMatchObject({ quantity: 2, exactQuantity: 1.3333 });
   });
 
   it('a zero coverage option produces an error warning instead of Infinity', () => {

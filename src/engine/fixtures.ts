@@ -9,9 +9,10 @@
  * "example house". Every id is a fixed string so the estimate is reproducible run to run — there
  * is no randomness and no clock anywhere in this module.
  *
- * Doorways are entered from BOTH rooms they join, with the same label in each: that way every
- * room's gripper stops at the opening, while the door-bar planner counts the opening once
- * (`DOORWAY_DUPLICATE`, see accessories.planDoorBars).
+ * Doorways are entered from BOTH rooms they join and the two entries carry the same
+ * `sharedOpeningId`: that way every room's gripper stops at the opening, while the door-bar planner
+ * counts the opening — and the door leaf to ease — once (`DOORWAY_SHARED`, see
+ * accessories.planDoorBars). The link is explicit, never guessed from the label.
  */
 import type { Project, Room, Staircase, Step, BroadloomProduct, PackProduct } from './types';
 import {
@@ -29,6 +30,18 @@ import {
   DEFAULT_STEP,
   DEFAULT_NOSING_OVERHANG,
 } from './defaults';
+
+/** The physical openings of the sample house; each is entered from both of the rooms it joins. */
+export const SAMPLE_OPENINGS = {
+  hallLounge: 'opening-hall-lounge',
+  hallKitchen: 'opening-hall-kitchen',
+  hallStairs: 'opening-hall-stairs',
+  landingStairs: 'opening-landing-stairs',
+  landingBed1: 'opening-landing-bed1',
+  landingBed2: 'opening-landing-bed2',
+  landingBed3: 'opening-landing-bed3',
+  landingBath: 'opening-landing-bath',
+} as const;
 
 /** Stable ids used by the sample project (exported so tests and the UI can refer to them). */
 export const SAMPLE_IDS = {
@@ -201,7 +214,7 @@ export function sampleProject(): Project {
       ],
     },
     // the polygon starts on the top wall at the bay's inner line: edge 0 is the top wall
-    doorways: [{ id: 'door-lounge-hall', edgeIndex: 0, offset: 3400, width: 838, transition: 'carpet', label: 'Lounge door' }],
+    doorways: [{ id: 'door-lounge-hall', edgeIndex: 0, offset: 3400, width: 838, transition: 'carpet', sharedOpeningId: SAMPLE_OPENINGS.hallLounge, label: 'Lounge door' }],
     productId: P.loungeCarpet,
     subfloor: { type: 'floorboards', condition: 'good', existingCovering: 'carpet', existingGripper: true, dpmKnown: true },
   };
@@ -212,7 +225,7 @@ export function sampleProject(): Project {
     shape: { kind: 'l_shape', length: 5200, width: 3600, cutoutLength: 2000, cutoutWidth: 1400, cutoutCorner: 'bottom-right' },
     // polygon: (0,0) (5200,0) (5200,2200) (3200,2200) (3200,3600) (0,3600); edge 4 is the bottom wall, edge 5 the left wall
     doorways: [
-      { id: 'door-kitchen-hall', edgeIndex: 5, offset: 2500, width: 762, transition: 'carpet', label: 'Kitchen door' },
+      { id: 'door-kitchen-hall', edgeIndex: 5, offset: 2500, width: 762, transition: 'carpet', sharedOpeningId: SAMPLE_OPENINGS.hallKitchen, label: 'Kitchen door' },
       { id: 'door-kitchen-back', edgeIndex: 4, offset: 800, width: 900, transition: 'external', label: 'Back door' },
     ],
     productId: P.kitchenVinyl,
@@ -227,9 +240,9 @@ export function sampleProject(): Project {
     // edge 0 top wall (0,0)-(4000,0); edge 2 bottom wall (4000,1000)-(0,1000); edge 3 left wall (0,1000)-(0,0)
     doorways: [
       { id: 'door-hall-front', edgeIndex: 3, offset: 50, width: 900, transition: 'external', label: 'Front door' },
-      { id: 'door-hall-lounge', edgeIndex: 2, offset: 2500, width: 838, transition: 'carpet', label: 'Lounge door' },
-      { id: 'door-hall-kitchen', edgeIndex: 0, offset: 3100, width: 762, transition: 'hard_floor', label: 'Kitchen door' },
-      { id: 'door-hall-stairs', edgeIndex: 0, offset: 800, width: 860, transition: 'carpet', continuous: true, label: 'Foot of stairs' },
+      { id: 'door-hall-lounge', edgeIndex: 2, offset: 2500, width: 838, transition: 'carpet', sharedOpeningId: SAMPLE_OPENINGS.hallLounge, label: 'Lounge door' },
+      { id: 'door-hall-kitchen', edgeIndex: 0, offset: 3100, width: 762, transition: 'hard_floor', sharedOpeningId: SAMPLE_OPENINGS.hallKitchen, label: 'Kitchen door' },
+      { id: 'door-hall-stairs', edgeIndex: 0, offset: 800, width: 860, transition: 'carpet', continuous: true, sharedOpeningId: SAMPLE_OPENINGS.hallStairs, label: 'Foot of stairs' },
     ],
     productId: P.hallCarpet,
     subfloor: { type: 'floorboards', condition: 'good', existingCovering: 'carpet', existingGripper: true, dpmKnown: true },
@@ -243,11 +256,11 @@ export function sampleProject(): Project {
     shape: { kind: 'l_shape', length: 3000, width: 2000, cutoutLength: 1800, cutoutWidth: 1100, cutoutCorner: 'top-right' },
     // polygon: (0,0) (1200,0) (1200,1100) (3000,1100) (3000,2000) (0,2000); edge 2 (1200,1100)-(3000,1100), edge 4 bottom, edge 5 left
     doorways: [
-      { id: 'door-landing-bed1', edgeIndex: 4, offset: 200, width: 762, transition: 'carpet', label: 'Bedroom 1 door' },
-      { id: 'door-landing-bed2', edgeIndex: 4, offset: 1400, width: 762, transition: 'carpet', label: 'Bedroom 2 door' },
-      { id: 'door-landing-bed3', edgeIndex: 2, offset: 300, width: 686, transition: 'hard_floor', label: 'Bedroom 3 door' },
-      { id: 'door-landing-bath', edgeIndex: 2, offset: 1100, width: 686, transition: 'hard_floor', label: 'Bathroom door' },
-      { id: 'door-landing-stairs', edgeIndex: 5, offset: 500, width: 860, transition: 'carpet', continuous: true, label: 'Head of stairs' },
+      { id: 'door-landing-bed1', edgeIndex: 4, offset: 200, width: 762, transition: 'carpet', sharedOpeningId: SAMPLE_OPENINGS.landingBed1, label: 'Bedroom 1 door' },
+      { id: 'door-landing-bed2', edgeIndex: 4, offset: 1400, width: 762, transition: 'carpet', sharedOpeningId: SAMPLE_OPENINGS.landingBed2, label: 'Bedroom 2 door' },
+      { id: 'door-landing-bed3', edgeIndex: 2, offset: 300, width: 686, transition: 'hard_floor', sharedOpeningId: SAMPLE_OPENINGS.landingBed3, label: 'Bedroom 3 door' },
+      { id: 'door-landing-bath', edgeIndex: 2, offset: 1100, width: 686, transition: 'hard_floor', sharedOpeningId: SAMPLE_OPENINGS.landingBath, label: 'Bathroom door' },
+      { id: 'door-landing-stairs', edgeIndex: 5, offset: 500, width: 860, transition: 'carpet', continuous: true, sharedOpeningId: SAMPLE_OPENINGS.landingStairs, label: 'Head of stairs' },
     ],
     productId: P.hallCarpet,
     subfloor: { type: 'floorboards', condition: 'good', existingCovering: 'carpet', existingGripper: true, dpmKnown: true },
@@ -257,7 +270,7 @@ export function sampleProject(): Project {
     id: R.bedroom1,
     name: 'Bedroom 1',
     shape: { kind: 'rectangle', length: 4200, width: 3500 },
-    doorways: [{ id: 'door-bed1', edgeIndex: 0, offset: 200, width: 762, transition: 'carpet', label: 'Bedroom 1 door' }],
+    doorways: [{ id: 'door-bed1', edgeIndex: 0, offset: 200, width: 762, transition: 'carpet', sharedOpeningId: SAMPLE_OPENINGS.landingBed1, label: 'Bedroom 1 door' }],
     productId: P.bedroomCarpet,
     subfloor: { type: 'floorboards', condition: 'good', existingCovering: 'carpet', existingGripper: true, dpmKnown: true },
   };
@@ -271,7 +284,7 @@ export function sampleProject(): Project {
       width: 3000,
       features: [{ id: 'feat-bed2-wardrobe', wall: 'right', offset: 300, width: 1800, depth: 600, label: 'Wardrobe recess' }],
     },
-    doorways: [{ id: 'door-bed2', edgeIndex: 0, offset: 300, width: 762, transition: 'carpet', label: 'Bedroom 2 door' }],
+    doorways: [{ id: 'door-bed2', edgeIndex: 0, offset: 300, width: 762, transition: 'carpet', sharedOpeningId: SAMPLE_OPENINGS.landingBed2, label: 'Bedroom 2 door' }],
     productId: P.bedroomCarpet,
     subfloor: { type: 'chipboard', condition: 'good', existingCovering: 'carpet', existingGripper: true, dpmKnown: true },
   };
@@ -280,7 +293,7 @@ export function sampleProject(): Project {
     id: R.bedroom3,
     name: 'Bedroom 3 (box room)',
     shape: { kind: 'rectangle', length: 2600, width: 2400 },
-    doorways: [{ id: 'door-bed3', edgeIndex: 0, offset: 200, width: 686, transition: 'carpet', label: 'Bedroom 3 door' }],
+    doorways: [{ id: 'door-bed3', edgeIndex: 0, offset: 200, width: 686, transition: 'carpet', sharedOpeningId: SAMPLE_OPENINGS.landingBed3, label: 'Bedroom 3 door' }],
     productId: P.laminate,
     subfloor: { type: 'floorboards', condition: 'good', existingCovering: 'carpet', existingGripper: true, dpmKnown: true },
     hardFloor: { layPattern: 'straight', useBeading: true },
@@ -290,7 +303,7 @@ export function sampleProject(): Project {
     id: R.bathroom,
     name: 'Bathroom',
     shape: { kind: 'rectangle', length: 2200, width: 1900 },
-    doorways: [{ id: 'door-bath', edgeIndex: 0, offset: 200, width: 686, transition: 'carpet', label: 'Bathroom door' }],
+    doorways: [{ id: 'door-bath', edgeIndex: 0, offset: 200, width: 686, transition: 'carpet', sharedOpeningId: SAMPLE_OPENINGS.landingBath, label: 'Bathroom door' }],
     productId: P.lvt,
     subfloor: { type: 'floorboards', condition: 'good', existingCovering: 'vinyl', existingGripper: false, dpmKnown: true },
     notes: 'Sanitaryware stays in; cut round the pedestal and WC.',

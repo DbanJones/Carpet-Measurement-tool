@@ -13,7 +13,7 @@ import type { CoveringKind, Landing, Mm, Product, Staircase, Step, StepKind, Sub
 import { isBroadloom } from '@engine/types';
 import { DEFAULT_NOSING_OVERHANG, DEFAULT_STEP, RUNNER_DEFAULT_WIDTH, STAIR_REGS } from '@engine/defaults';
 import { MM_PER_INCH } from '@engine/units';
-import { Checkbox, Field, LengthInput, NumberInput, Section, Select, formatLength } from '@ui/components/inputs';
+import { Checkbox, Field, LengthInput, NumberInput, Section, Select, formatLength, FieldGroup } from '@ui/components/inputs';
 import { StairsPreview } from './StairsPreview';
 
 type Unit = 'metric' | 'imperial';
@@ -151,16 +151,6 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
 
-/** A labelled group of several inputs (Field wraps a single input in a <label>; this does not). */
-function FieldGroup({ label, hint, children }: { label: ReactNode; hint?: ReactNode; children: ReactNode }) {
-  return (
-    <div className="field">
-      <span className="field-label">{label}</span>
-      {children}
-      {hint ? <span className="field-hint">{hint}</span> : null}
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Editor
@@ -253,6 +243,7 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
   const deleteStep = (index: number) =>
     updateStaircase(id, (s) => {
       if (s.steps.length <= 1) return s;
+      // there is no undo in the app and the row holds a measured rise, going and width
       const nextSteps = s.steps.filter((_, i) => i !== index);
       const nextLandings = s.landings.map((l) => {
         const shifted = l.afterStepIndex > index ? l.afterStepIndex - 1 : l.afterStepIndex;
@@ -268,12 +259,17 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
   const addLanding = () =>
     updateStaircase(id, (s) => {
       const last = s.steps[s.steps.length - 1];
+      const first = s.landings.length === 0;
+      // The FIRST landing is the one at the head of the flight. A second one defaults to the middle:
+      // only one landing can carry the top riser, so stacking them all at the head would either be
+      // rejected or, worse, pay for the same riser twice. Move it with the Position column.
+      const afterStepIndex = first ? Math.max(0, s.steps.length - 1) : Math.max(0, Math.floor((s.steps.length - 1) / 2));
       const landing: Landing = {
         id: newId('landing'),
-        kind: s.landings.length === 0 ? 'top' : 'quarter',
+        kind: first ? 'top' : 'quarter',
         length: DEFAULT_LANDING_LENGTH,
         width: last?.width ?? DEFAULT_STEP.width,
-        afterStepIndex: Math.max(0, s.steps.length - 1),
+        afterStepIndex,
       };
       return { ...s, landings: [...s.landings, landing] };
     });
@@ -402,9 +398,10 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
       <Section
         title="Steps (from the bottom up)"
         actions={
-          <span className={pitchTooSteep ? 'badge warn' : 'badge'} title="Flight pitch: total rise over total going of the straight steps">
-            Pitch {flightPitch === null ? '—' : `${flightPitch.toFixed(1)}°`}
+          <span className={pitchTooSteep ? 'badge warn' : 'badge'}>
+            {pitchTooSteep ? '⚠ ' : ''}Pitch {flightPitch === null ? '—' : `${flightPitch.toFixed(1)}°`}
             {pitchTooSteep ? ` — steeper than ${STAIR_REGS.maxPitchDeg}°` : ''}
+            <span className="sr-only"> (total rise over total going of the straight steps)</span>
           </span>
         }
       >
@@ -442,7 +439,9 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
                   onPatch={(p) => patchStep(step.id, p)}
                   onKind={(kind) => patchSteps((all) => all.map((st) => (st.id === step.id ? withKind(st, kind) : st)))}
                   onInsertWinder={() => insertWinderAbove(index)}
-                  onDelete={() => deleteStep(index)}
+                  onDelete={() => {
+                    if (window.confirm(`Delete step ${index + 1}? Its measured rise, going and width are lost.`)) deleteStep(index);
+                  }}
                 />
               ))}
             </tbody>
@@ -499,7 +498,14 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
                       />
                     </td>
                     <td>
-                      <button type="button" className="danger" aria-label={`Remove landing ${k + 1}`} onClick={() => removeLanding(l.id)}>
+                      <button
+                        type="button"
+                        className="danger"
+                        aria-label={`Remove landing ${k + 1}`}
+                        onClick={() => {
+                          if (window.confirm(`Remove landing ${k + 1}? Its measured length and width are lost.`)) removeLanding(l.id);
+                        }}
+                      >
                         Remove
                       </button>
                     </td>
@@ -617,12 +623,27 @@ function StepRow({
           )}
         </td>
       ) : null}
-      <td className="num">{pitch === null ? <span className="muted">—</span> : <span className={pitchTooSteep ? 'stairs-pitch-warn' : ''}>{pitch.toFixed(1)}°</span>}</td>
+      {/* WCAG 1.4.1: the failing pitch must not be signalled by hue alone — orange bold text is
+          invisible to a colour-blind fitter and hard to read in sunlight, so add a marker. */}
+      <td className="num">
+        {pitch === null ? (
+          <span className="muted">—</span>
+        ) : pitchTooSteep ? (
+          <span className="stairs-pitch-warn">
+            {pitch.toFixed(1)}° ⚠<span className="sr-only"> steeper than {STAIR_REGS.maxPitchDeg}°</span>
+          </span>
+        ) : (
+          <span>{pitch.toFixed(1)}°</span>
+        )}
+      </td>
+      {/* `title` alone never appears on a touch screen and is not reliably announced, so the actual
+          numbers go in the cell; the codes stay as the at-a-glance summary. */}
       <td>
         {issues.length > 0 ? (
-          <span className="badge warn" title={issues.map((i) => i.text).join('; ')}>
-            ⚠ {issues.map((i) => i.code).join(', ')}
-          </span>
+          <>
+            <span className="badge warn">⚠ {issues.map((i) => i.code).join(', ')}</span>
+            <span className="stairs-issue">{issues.map((i) => i.text).join('; ')}</span>
+          </>
         ) : (
           <span className="badge ok">OK</span>
         )}

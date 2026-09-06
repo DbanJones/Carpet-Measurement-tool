@@ -185,6 +185,22 @@ export function RollCutDiagram({ plan, product, unit, rollHeightPx = 170, maxWid
         </svg>
       </div>
       <figcaption className="small muted">{caption}</figcaption>
+      {/* The four fills carry meaning and the tooltips do not print, so the printed cutting plan
+          needs a key: main and fill are two tans about 1.2:1 apart, and small pieces get no label. */}
+      <ul className="roll-cut-legend">
+        <li>
+          <span className="swatch" aria-hidden="true" /> Main piece
+        </li>
+        <li>
+          <span className="swatch fill" aria-hidden="true" /> Fill piece
+        </li>
+        <li>
+          <span className="swatch stair" aria-hidden="true" /> Stairs / landing
+        </li>
+        <li>
+          <span className="swatch offcut" aria-hidden="true" /> Offcut
+        </li>
+      </ul>
     </figure>
   );
 }

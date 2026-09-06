@@ -18,7 +18,7 @@ import { useEstimate, useRollWidthComparison } from '@store/useEstimate';
 import type { BomLine, BroadloomProduct, CutPiece, Id, Product, Project, RollPlan } from '@engine/types';
 import type { ProjectEstimate } from '@engine/estimate';
 import { MM_PER_M, roundTo } from '@engine/units';
-import { formatArea, formatLength, formatMoney } from '@ui/components/inputs';
+import { Field, formatArea, formatLength, formatMoney } from '@ui/components/inputs';
 import { BomTable } from './BomTable';
 import { RollCutDiagram, formatPercent } from './RollCutDiagram';
 import { RoomResults, StairResults } from './RoomResults';
@@ -67,7 +67,8 @@ export interface PackSummary {
 /** Pack-sold coverings (laminate, LVT, tiles) from the BOM: "Oak effect laminate: 4 packs". */
 export function packSummaries(estimate: ProjectEstimate, project: Project): PackSummary[] {
   return estimate.bom
-    .filter((l: BomLine) => l.category === 'floor_covering' && l.unit !== 'lm')
+    // the recommended spare pack is not part of what covers the floor: it is offered separately
+    .filter((l: BomLine) => l.category === 'floor_covering' && l.unit !== 'lm' && !l.id.endsWith(':spare'))
     .map((l) => {
       const productId = l.id.startsWith(COVERING_LINE_PREFIX) ? l.id.slice(COVERING_LINE_PREFIX.length) : undefined;
       const product = productId ? project.products.find((p) => p.id === productId) : undefined;
@@ -129,7 +130,8 @@ function SummaryKpis({ estimate, project, expanded }: { estimate: ProjectEstimat
   const rolls = estimate.rollPlans.reduce((s, p) => s + p.rollsRequired, 0);
 
   return (
-    <div className="kpis" data-testid="results-kpis">
+    // The figures change as the user types a width; a screen-reader user has no other way to know.
+    <div className="kpis" data-testid="results-kpis" aria-live="polite">
       <Kpi label="Net floor area" value={formatArea(totals.netAreaM2, unit)} testId="kpi-net-area" />
       <Kpi label="Materials" value={formatMoney(totals.materialsCost, currency)} testId="kpi-materials" />
       <Kpi label="Labour" value={formatMoney(totals.labourCost, currency)} testId="kpi-labour" />
@@ -360,6 +362,7 @@ export function ResultsPanel({ expanded }: { expanded?: boolean }) {
   return (
     <div className="results-panel results-expanded" data-testid="results-panel">
       <section className="panel results-summary">
+        <QuoteDetails project={project} />
         <header className="results-head">
           <h2>Estimate — {project.name}</h2>
           <div className="row no-print results-actions">
@@ -412,7 +415,89 @@ export function ResultsPanel({ expanded }: { expanded?: boolean }) {
       <section className="panel results-bom">
         <h3>Bill of materials</h3>
         <BomTable lines={estimate.bom} totals={estimate.totals} project={project} />
+        {project.notes?.trim() ? (
+          <div className="quote-notes">
+            <h4>Notes and terms</h4>
+            <p>{project.notes}</p>
+          </div>
+        ) : null}
       </section>
     </div>
+  );
+}
+
+/**
+ * Who the quote is for and when. A printed estimate headed with only whatever was typed in the
+ * project-name box, and carrying no date, is not something a customer can hold anyone to.
+ * The fields are editable here and printed as a block above the figures.
+ */
+function QuoteDetails({ project }: { project: Project }) {
+  const updateProject = useProjectStore((s) => s.updateProject);
+  const filled = [project.customer, project.siteAddress, project.quoteRef, project.quoteDate].some((v) => v?.trim());
+  return (
+    <>
+      {filled ? (
+        <dl className="quote-header" data-testid="quote-header">
+          {project.customer?.trim() ? (
+            <div>
+              <dt>Customer</dt>
+              <dd>{project.customer}</dd>
+            </div>
+          ) : null}
+          {project.siteAddress?.trim() ? (
+            <div>
+              <dt>Site</dt>
+              <dd>{project.siteAddress}</dd>
+            </div>
+          ) : null}
+          {project.quoteRef?.trim() ? (
+            <div>
+              <dt>Quote ref</dt>
+              <dd>{project.quoteRef}</dd>
+            </div>
+          ) : null}
+          {project.quoteDate?.trim() ? (
+            <div>
+              <dt>Date</dt>
+              <dd>{project.quoteDate}</dd>
+            </div>
+          ) : null}
+          {project.validFor?.trim() ? (
+            <div>
+              <dt>Valid for</dt>
+              <dd>{project.validFor}</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+      <details className="quote-details no-print">
+        <summary>Quote details (customer, site, reference, date)</summary>
+        <div className="grid-2">
+          <Field label="Customer">
+            <input type="text" value={project.customer ?? ''} aria-label="Customer" onChange={(e) => updateProject({ customer: e.target.value })} />
+          </Field>
+          <Field label="Site address">
+            <input type="text" value={project.siteAddress ?? ''} aria-label="Site address" onChange={(e) => updateProject({ siteAddress: e.target.value })} />
+          </Field>
+          <Field label="Quote reference">
+            <input type="text" value={project.quoteRef ?? ''} aria-label="Quote reference" onChange={(e) => updateProject({ quoteRef: e.target.value })} />
+          </Field>
+          <Field label="Date" hint="Printed at the head of the estimate.">
+            <span className="row">
+              <input type="date" value={project.quoteDate ?? ''} aria-label="Quote date" onChange={(e) => updateProject({ quoteDate: e.target.value })} />
+              <button type="button" className="link" onClick={() => updateProject({ quoteDate: new Date().toISOString().slice(0, 10) })}>
+                Today
+              </button>
+            </span>
+          </Field>
+          <Field label="Valid for" hint="How long the price holds, e.g. 30 days.">
+            <input type="text" value={project.validFor ?? ''} aria-label="Valid for" onChange={(e) => updateProject({ validFor: e.target.value })} />
+          </Field>
+        </div>
+        <Field label="Notes and terms" hint="Printed under the bill of materials.">
+          <textarea rows={3} value={project.notes ?? ''} aria-label="Notes and terms" onChange={(e) => updateProject({ notes: e.target.value })} />
+        </Field>
+      </details>
+    </>
   );
 }

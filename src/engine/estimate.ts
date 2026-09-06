@@ -42,8 +42,9 @@ import type {
   PriceBook,
   CoveringKind,
   Subfloor,
+  Doorway,
 } from './types';
-import { shapeToPolygon, polygonAreaMm2, polygonPerimeter, fixingPerimeter, boundingBox, distance } from './geometry';
+import { shapeToPolygon, polygonAreaMm2, polygonPerimeter, fixingPerimeter, boundingBox, distance, isSimplePolygon, doorwayProblem, hasOverlappingDoorways } from './geometry';
 import { buildRollPlan, type RollPlanInput, type RollPlanRoom } from './rollplan';
 import { planStaircase, type StairPlan } from './stairs';
 import { planHardFloor, planSheetVinylSundries, isFloatingFloor, type HardFloorPlan, type SheetVinylSundries } from './hardfloor';
@@ -52,6 +53,7 @@ import {
   planGripper,
   planDoorBars,
   planTapes,
+  wholeUnitsWithTolerance,
   DOOR_BAR_TYPES,
   type UnderlayPlan,
   type UnderlayArea,
@@ -76,6 +78,7 @@ import {
   VINYL_ADHESIVE_TUB_KG,
   LVT_ADHESIVE_TUB_KG,
   TACKIFIER_TUB_LITRES,
+  GRIPPER_PER_STEP,
 } from './defaults';
 import { mm2ToM2, roundTo, ceilToStep, MM_PER_M } from './units';
 
@@ -138,13 +141,38 @@ export const EXISTING_BUILD_UP: Record<NonNullable<Subfloor['existingCovering']>
 /** Floor-preparation kinds bought as materials, and the price-book entry that prices them. */
 export const PREP_MATERIAL_PRICE: Partial<Record<PrepItemKind, keyof PriceBook['materials']>> = {
   latex: 'latexPerBag',
-  primer: 'primerPerLitre',
+  primer: 'primerPerCan',
   ply: 'plyPerSheet',
   ply_screws: 'plyScrewsPerBox',
   hardboard: 'hardboardPerSheet',
   liquid_dpm: 'liquidDpmPerKg',
   dpm_sheet: 'dpmSheetPerRoll',
 };
+
+/**
+ * Preparation kinds that are LABOUR, priced on their own quantity (metres, m², tests) rather than
+ * on the room area the way uplift / latex / ply are. The prep line itself carries the quantity and
+ * the labour line carries the money, exactly as for uplift.
+ */
+export const PREP_LABOUR_RATE: Partial<Record<PrepItemKind, { key: keyof PriceBook['labour']; description: string }>> = {
+  gripper_removal: { key: 'gripperRemovalPerM', description: 'Remove existing gripper' },
+  moisture_test: { key: 'moistureTestPerTest', description: 'Subfloor moisture test' },
+  secure_boards: { key: 'boardPrepPerM2', description: 'Secure loose floorboards' },
+  sand_boards: { key: 'boardPrepPerM2', description: 'Sand floorboards flat' },
+  skirting_refit: { key: 'skirtingRefitPerM', description: 'Remove and refit skirting' },
+};
+
+/** Preparation kinds that cost nothing to buy or do — they take time in the programme. */
+export const PREP_NO_CHARGE: Partial<Record<PrepItemKind, string>> = {
+  acclimatise: 'No charge — allow the time in the programme before fitting.',
+};
+
+/**
+ * Preparation kinds whose money is on a labour line rather than the preparation line: the ones
+ * priced per m² of the rooms they apply to, plus every kind in `PREP_LABOUR_RATE`. Used only to say
+ * so in the note, so a required line never reads as free.
+ */
+const PREP_PRICED_AS_LABOUR: PrepItemKind[] = ['uplift', 'disposal', 'latex', 'ply', 'hardboard', 'door_easing', ...(Object.keys(PREP_LABOUR_RATE) as PrepItemKind[])];
 
 // ---------------------------------------------------------------------------
 // Types
@@ -190,6 +218,8 @@ interface RoomCtx {
   room: Room;
   product: Product | undefined;
   polygon: Polygon;
+  /** The room's doorways that actually sit on its outline; ones that do not are reported and dropped. */
+  doorways: Doorway[];
   areaM2: M2;
   perimeter: Mm;
   fixingPerimeter: Mm;
@@ -222,6 +252,29 @@ function mergeDefined<T extends object>(base: T, over: Partial<T> | undefined): 
   if (!over) return out;
   for (const [k, v] of Object.entries(over)) {
     if (v !== undefined) (out as Record<string, unknown>)[k] = v;
+  }
+  return out;
+}
+
+/**
+ * A recess (negative depth) deeper than the room would break through the opposite wall. The geometry
+ * clamps it so the outline stays simple; this says so, because the room is then not the shape the
+ * user typed.
+ */
+function featureWarnings(room: Room): Warning[] {
+  if (room.shape.kind !== 'rectangle_with_features') return [];
+  const { length, width, features } = room.shape;
+  const out: Warning[] = [];
+  for (const f of features ?? []) {
+    const limit = f.wall === 'top' || f.wall === 'bottom' ? width : length;
+    if (f.depth < 0 && -f.depth > limit + 1e-6) {
+      out.push({
+        level: 'warning',
+        code: 'FEATURE_TOO_DEEP',
+        message: `${room.name}: "${f.label ?? 'recess'}" is ${Math.round(-f.depth)} mm deep on a wall only ${Math.round(limit)} mm from the far side — it has been cut back to the opposite wall. Check the measurement.`,
+        subjectId: room.id,
+      });
+    }
   }
   return out;
 }
@@ -259,23 +312,64 @@ function prepare(project: Project): Prepared {
 
   const rooms: RoomCtx[] = (project.rooms ?? []).map((room) => {
     const polygon = safePolygon(room);
-    const hasArea = polygon.length >= 3 && polygonAreaMm2(polygon) > 0;
-    const areaM2 = hasArea ? mm2ToM2(polygonAreaMm2(polygon)) : 0;
+    // A bowtie still has a (partly cancelled) shoelace area, so check the area FIRST: a room with no
+    // area at all is simply not measured yet, which is a different thing to say than "it crosses itself".
+    const areaMm2 = polygon.length >= 3 ? polygonAreaMm2(polygon) : 0;
+    const simple = areaMm2 > 0 && isSimplePolygon(polygon);
+    const hasArea = simple;
+    const areaM2 = hasArea ? mm2ToM2(areaMm2) : 0;
     const product = products.get(room.productId);
     if (!product) {
       warnings.push({ level: 'error', code: 'MISSING_PRODUCT', message: `${room.name}: no product selected (or the product was deleted) — the room is not included in the quantities.`, subjectId: room.id });
     }
-    if (!hasArea) {
+    if (areaMm2 <= 0) {
       warnings.push({ level: 'error', code: 'EMPTY_ROOM', message: `${room.name}: the outline has no area — enter its dimensions.`, subjectId: room.id });
+    } else if (!simple) {
+      warnings.push({
+        level: 'error',
+        code: 'SELF_INTERSECTING',
+        message: `${room.name}: the outline crosses itself, so its area and the carpet it needs cannot be worked out — check the wall lengths (a recess deeper than the room, or points in the wrong order).`,
+        subjectId: room.id,
+      });
+    }
+    warnings.push(...featureWarnings(room));
+    // A doorway whose edge no longer exists (the shape was changed after it was entered) must not be
+    // quietly reattached to another wall by the index wrapping, nor billed a bar it cannot fit.
+    const doorways: Doorway[] = [];
+    for (const d of room.doorways ?? []) {
+      const problem = hasArea ? doorwayProblem(polygon, d) : null;
+      if (problem === null) {
+        doorways.push(d);
+        continue;
+      }
+      const label = d.label?.trim() || `doorway ${d.id}`;
+      warnings.push({
+        level: 'warning',
+        code: 'DOORWAY_OFF_EDGE',
+        message:
+          problem === 'no_such_edge'
+            ? `${room.name}: "${label}" is on wall ${d.edgeIndex + 1}, which this outline no longer has (${polygon.length} walls) — it is left out of the gripper and the door bars. Put it back on a wall.`
+            : `${room.name}: "${label}" starts ${Math.round(d.offset)} mm along a wall that is shorter than that — it is left out of the gripper and the door bars. Check its position.`,
+        subjectId: room.id,
+      });
+    }
+    if (hasArea && hasOverlappingDoorways(polygon, doorways)) {
+      warnings.push({
+        level: 'warning',
+        code: 'DOORWAY_OVERLAP',
+        message: `${room.name}: two openings overlap on the same wall — they are counted as one hole for the gripper. Check their positions.`,
+        subjectId: room.id,
+      });
     }
     const bb = hasArea ? boundingBox(polygon) : { length: 0, width: 0 };
     return {
       room,
       product,
       polygon,
+      doorways,
       areaM2,
       perimeter: hasArea ? polygonPerimeter(polygon) : 0,
-      fixingPerimeter: hasArea ? fixingPerimeter(polygon, room.doorways ?? []) : 0,
+      fixingPerimeter: hasArea ? fixingPerimeter(polygon, doorways) : 0,
       bbox: { length: bb.length, width: bb.width },
       broadloom: mergeDefined(opts.broadloom, room.planning),
       hardFloor: mergeDefined(opts.hardFloor, room.hardFloor),
@@ -300,7 +394,7 @@ function prepare(project: Project): Prepared {
 function rollPlanInputFor(prep: Prepared, product: BroadloomProduct, base: BroadloomPlanningOptions, rollWidth?: Mm): RollPlanInput | null {
   const rooms: RollPlanRoom[] = prep.rooms
     .filter((r) => r.planned && r.product?.id === product.id)
-    .map((r) => ({ roomId: r.room.id, roomName: r.room.name, polygon: r.polygon, doorways: r.room.doorways ?? [], options: r.broadloom }));
+    .map((r) => ({ roomId: r.room.id, roomName: r.room.name, polygon: r.polygon, doorways: r.doorways, options: r.broadloom }));
   const extraPieces: CutPiece[] = [];
   let extraNetAreaMm2 = 0;
   for (const s of prep.stairs) {
@@ -340,6 +434,18 @@ function fmtM(mm: Mm): string {
 
 function fmtPct(fraction: number): string {
   return `${roundTo(fraction * 100, 1)}%`;
+}
+
+/**
+ * One way of saying "how much floor is this and how much of what you buy is waste", used identically
+ * for broadloom and for pack floors so two lines on one quote can be compared.
+ * Waste is always measured against what is BOUGHT, and the bought figure is what is actually ordered
+ * (whole packs, whole linear metres) — not an intermediate gross area nobody pays for.
+ * Example: 8.88 m² bought for 6.24 m² of floor (29.7% waste).
+ */
+function coverageNote(boughtM2: M2, netM2: M2): string {
+  const waste = boughtM2 > 0 ? Math.max(0, (boughtM2 - netM2) / boughtM2) : 0;
+  return `${fmtM2(boughtM2)} bought for ${fmtM2(netM2)} of floor (${fmtPct(waste)} waste)`;
 }
 
 /** Lower-case id fragment from free text: "Latex smoothing compound, 3 mm" -> "latex-smoothing-compound-3-mm". */
@@ -416,10 +522,24 @@ interface LineSpec {
 
 class Bom {
   readonly lines: BomLine[] = [];
-  constructor(private readonly currency: string) {}
+  constructor(
+    private readonly currency: string,
+    private readonly warnings: Warning[] = [],
+  ) {}
 
   add(spec: LineSpec): BomLine | undefined {
-    if (!(spec.quantity > 0)) return undefined;
+    // A quantity the engine INTENDED to add but cannot express as a number is a hole in the quote,
+    // not a line to drop: a NaN piece length once produced a carpet-less estimate with no warning.
+    if (!Number.isFinite(spec.quantity)) {
+      this.warnings.push({
+        level: 'error',
+        code: 'QUANTITY_INVALID',
+        message: `"${spec.description}" could not be quantified (${spec.quantity}) and is missing from the quote — check the room dimensions, allowances and supply sizes.`,
+        ...(spec.subjectIds[0] !== undefined ? { subjectId: spec.subjectIds[0] } : {}),
+      });
+      return undefined;
+    }
+    if (spec.quantity <= 0) return undefined;
     const line: BomLine = {
       id: `bom:${spec.id}`,
       category: spec.category,
@@ -457,17 +577,25 @@ class Bom {
  *   price = £/m² x roll width in m. A 9.9 lm order of a 4 m carpet at £22/m² is 9.9 x 88 = £871.20.
  * - Pack floors are bought by the pack for the whole project: the rooms' exact pack requirements
  *   are summed BEFORE rounding up, so two rooms needing 3.4 + 2.3 packs order 6, not 4 + 3 = 7.
- *   Stairs in a pack product add their gross cladding area.
+ *   Stairs in a pack product add their gross cladding area. Whole units (packs, rolls, gripper
+ *   packs, beading) round UP except within `OVER_RUN_TOLERANCE`, where the shortfall comes out of
+ *   the offcuts and the note says so — 3.008 packs is three packs, not four.
+ * - Every covering line reports the same three figures: what is BOUGHT, the floor area, and the
+ *   waste as a fraction of what is bought (`coverageNote`), so two lines can be compared.
  * - Underlay covers carpet rooms and carpet stair pads only; gripper only carpet (stairs included);
- *   door bars are planned once per opening even when it is entered from both rooms.
+ *   door bars and door easing are counted once per PHYSICAL opening — doorways entered from both
+ *   rooms are joined by `Doorway.sharedOpeningId`, never by matching their labels.
  * - Sheet vinyl is fully bonded above `VINYL_FULLY_BONDED_MIN_AREA_M2` or when seamed, else
  *   perimeter-stuck with double-sided tape. Adhesive and tape are merged across rooms before
  *   rounding to tubs / rolls.
  * - Floor preparation items keep their required / recommended status: recommended lines are
  *   priced but excluded from the totals, with the cost shown in the notes.
+ * - Floor preparation covers the STAIRCASES as well as the rooms: a flight of old carpet has to be
+ *   stripped, skipped and its gripper pulled like any floor (and is the slowest uplift on the job).
  * - Labour: fitting per m² of net room area by covering kind; stairs per step; uplift, disposal,
- *   smoothing compound and ply overlay per m² of the rooms they apply to; door easing per door;
- *   binding per metre of bound stair edge.
+ *   smoothing compound and ply overlay per m² of the rooms they apply to; gripper removal, skirting
+ *   refit, board preparation and moisture tests on their own quantities; door easing per door leaf;
+ *   binding per metre of bound stair edge; and never less than `labour.minimumJobLabour` in total.
  * - Totals: materials + labour = subtotal; VAT at `prices.vatRate` when `prices.applyVat`.
  *
  * Worked example — a single 4.2 x 3.5 m bedroom in 4 m carpet at £18/m² with default prices:
@@ -512,7 +640,7 @@ export function estimateProject(project: Project): ProjectEstimate {
     productByOwner[r.room.id] = r.product.id;
     if (isBroadloomProduct(r.product)) continue;
     const plan = planHardFloor({
-      room: { ownerId: r.room.id, ownerName: r.room.name, polygon: r.polygon, doorways: r.room.doorways ?? [], subfloor: r.room.subfloor },
+      room: { ownerId: r.room.id, ownerName: r.room.name, polygon: r.polygon, doorways: r.doorways, subfloor: r.room.subfloor },
       product: r.product,
       options: r.hardFloor,
       floorPrep: opts.floorPrep,
@@ -543,7 +671,7 @@ export function estimateProject(project: Project): ProjectEstimate {
     ownerId: r.room.id,
     ownerName: r.room.name,
     polygon: r.polygon,
-    doorways: r.room.doorways ?? [],
+    doorways: r.doorways,
     subfloor: r.room.subfloor,
     covering: 'carpet',
   }));
@@ -558,10 +686,14 @@ export function estimateProject(project: Project): ProjectEstimate {
   if (gripper) warnings.push(...gripper.warnings);
 
   // ---- 6. door bars (hard floors first so their profile wins for a shared doorway) ------------------------
+  // Hard floors first, so a shared opening takes the profile its harder side needs. Between two
+  // rooms of the same class the side whose build-up changes most wins: it is the side that decides
+  // whether the door leaf has to come off, and it owns the opening for the door-easing count too.
+  const buildUpOf = (r: RoomCtx & { product: Product }) => buildUpChange(r.product, r.room.subfloor, opts.underlay) ?? 0;
   const doorBarRooms: DoorBarRoom[] = [...plannedRooms]
-    .sort((a, b) => DOOR_BAR_PRECEDENCE[a.product.kind] - DOOR_BAR_PRECEDENCE[b.product.kind])
+    .sort((a, b) => DOOR_BAR_PRECEDENCE[a.product.kind] - DOOR_BAR_PRECEDENCE[b.product.kind] || buildUpOf(b) - buildUpOf(a))
     .map((r) => {
-      const room: DoorBarRoom = { ownerId: r.room.id, ownerName: r.room.name, doorways: r.room.doorways ?? [], covering: r.product.kind };
+      const room: DoorBarRoom = { ownerId: r.room.id, ownerName: r.room.name, doorways: r.doorways, covering: r.product.kind, polygon: r.polygon };
       if (r.product.thickness !== undefined) room.productThickness = r.product.thickness;
       return room;
     });
@@ -581,7 +713,7 @@ export function estimateProject(project: Project): ProjectEstimate {
     const seams = seamsFor(r);
     const fullyBonded = r.areaM2 > VINYL_FULLY_BONDED_MIN_AREA_M2 || seams.length > 0;
     const sundries = planSheetVinylSundries({
-      room: { ownerId: r.room.id, polygon: r.polygon, doorways: r.room.doorways ?? [] },
+      room: { ownerId: r.room.id, polygon: r.polygon, doorways: r.doorways },
       fullyBonded,
       seamLengthMm: sumSeamLength(seams),
       accessories: opts.accessories,
@@ -609,14 +741,21 @@ export function estimateProject(project: Project): ProjectEstimate {
   }
 
   // ---- 8. floor preparation ----------------------------------------------------------------------------------
+  // Doors are eased once per DOOR LEAF. `doorBars` has already reduced the doorways to one line per
+  // physical opening (owned by the room whose covering decides the profile), so counting its lines
+  // cannot count a shared door twice. An external door is not eased for a new floor inside.
+  const doorLeavesByRoom = new Map<Id, number>();
+  for (const b of doorBars.bars) {
+    if (b.continuous || b.transition === 'none' || b.transition === 'external') continue;
+    doorLeavesByRoom.set(b.ownerId, (doorLeavesByRoom.get(b.ownerId) ?? 0) + 1);
+  }
   const prepRooms: PrepRoomInput[] = plannedRooms.map((r) => {
-    const doorways = r.room.doorways ?? [];
     const input: PrepRoomInput = {
       ownerId: r.room.id,
       ownerName: r.room.name,
       areaM2: r.areaM2,
       perimeter: r.perimeter,
-      doorwayCount: doorways.filter((d) => !d.continuous && d.transition !== 'none').length,
+      doorwayCount: doorLeavesByRoom.get(r.room.id) ?? 0,
       subfloor: r.room.subfloor,
       covering: r.product.kind,
       underlayHasDpm: r.hardFloor.underlayHasDpm,
@@ -626,12 +765,29 @@ export function estimateProject(project: Project): ProjectEstimate {
     if (!isBroadloomProduct(r.product) && isFloatingFloor(r.product.kind) && r.hardFloor.useBeading === false) input.refitSkirting = true;
     return input;
   });
+  // Stairs need stripping, skipping and their gripper pulling just like a room — more so, in fact,
+  // as it is the slowest uplift on the job. The "perimeter" of a flight is its gripper run.
+  for (const st of prep.stairs) {
+    if (!st.plan || !st.product || !st.staircase.subfloor) continue;
+    const areaM2 = isBroadloomProduct(st.product) ? mm2ToM2(st.plan.netAreaMm2) : (st.plan.hardFloorAreaM2 ?? 0);
+    if (!(areaM2 > 0)) continue;
+    prepRooms.push({
+      ownerId: st.staircase.id,
+      ownerName: st.staircase.name,
+      areaM2,
+      perimeter: GRIPPER_PER_STEP * (st.staircase.steps ?? []).reduce((sum, step) => sum + Math.max(0, step.width), 0),
+      doorwayCount: 0,
+      subfloor: st.staircase.subfloor,
+      covering: st.product.kind,
+    });
+  }
   const floorPrep = planFloorPrep({ rooms: prepRooms, options: opts.floorPrep });
   warnings.push(...floorPrep.warnings);
 
   // ---- 9. bill of materials ---------------------------------------------------------------------------------
-  const bom = new Bom(prices.currency);
+  const bom = new Bom(prices.currency, warnings);
   const areaOf = new Map<Id, M2>(plannedRooms.map((r) => [r.room.id, r.areaM2]));
+  for (const st of prepRooms) if (!areaOf.has(st.ownerId)) areaOf.set(st.ownerId, st.areaM2);
 
   // floor coverings: broadloom by the linear metre
   for (const product of products) {
@@ -640,7 +796,7 @@ export function estimateProject(project: Project): ProjectEstimate {
     const owners = [...plan.pieces.map((p) => p.ownerId)];
     const cutTotal = plan.cuts.reduce((s, c) => s + c.length, 0);
     const notes = [
-      `${fmtM2(plan.orderedAreaM2)} ordered for ${fmtM2(plan.netAreaM2)} net (${fmtPct(plan.wasteFraction)} waste)`,
+      coverageNote(plan.orderedAreaM2, plan.netAreaM2),
       `${plan.rollsRequired} roll${plan.rollsRequired === 1 ? '' : 's'}, ${plan.cuts.length} cut${plan.cuts.length === 1 ? '' : 's'}`,
       `pile ${plan.pileDirection === 'along_length' ? 'along the length' : 'across the width'} of the rooms`,
     ];
@@ -681,10 +837,19 @@ export function estimateProject(project: Project): ProjectEstimate {
       if (product.packCoverageM2 > 0) exactPacks += sp.hardFloorGrossAreaM2 / product.packCoverageM2;
       owners.push(sp.staircaseId);
     }
-    const packs = Math.ceil(exactPacks - 1e-9);
+    // Packs round UP, but not for a rounding error's worth: 3.0076 packs is three packs and 0.02 m²
+    // to find in the offcuts, not a whole fourth pack (42% over the floor area). See OVER_RUN_TOLERANCE.
+    const { units: packs, shortfall } = wholeUnitsWithTolerance(exactPacks, 1);
     const unit = product.kind === 'carpet_tiles' ? 'box' : 'pack';
     const unitPrice = product.pricePerPack ?? (product.pricePerM2 !== undefined ? money(product.pricePerM2 * product.packCoverageM2) : undefined);
-    const wastePct = netM2 > 0 ? fmtPct((grossM2 - netM2) / netM2) : '0%';
+    const boughtM2 = packs * product.packCoverageM2;
+    const notes = [
+      coverageNote(boughtM2, netM2),
+      `${packs} ${unit}${packs === 1 ? '' : 's'} for ${fmtM2(netM2)} net + ${fmtPct(netM2 > 0 ? (grossM2 - netM2) / netM2 : 0)} cutting wastage = ${fmtM2(grossM2)}${stairPlansFor.length > 0 ? ' incl. stairs' : ''}`,
+    ];
+    if (shortfall > 0) {
+      notes.push(`rounded down from ${roundTo(exactPacks, 3)} ${unit}s — ${fmtM2(shortfall * product.packCoverageM2)} to come out of the offcuts`);
+    }
     bom.add({
       id: `covering:${product.id}`,
       category: 'floor_covering',
@@ -694,8 +859,22 @@ export function estimateProject(project: Project): ProjectEstimate {
       exactQuantity: exactPacks,
       unitPrice,
       subjectIds: owners,
-      notes: `${fmtM2(netM2)} net + ${wastePct} wastage = ${fmtM2(grossM2)}${stairPlansFor.length > 0 ? ' incl. stairs' : ''}`,
+      notes: notes.join('; '),
     });
+    // A spare pack is kept back for later repairs: the same batch will not be available in a year.
+    if (packs > 0) {
+      bom.add({
+        id: `covering:${product.id}:spare`,
+        category: 'floor_covering',
+        description: `${product.name} — spare ${unit} kept for repairs`,
+        quantity: 1,
+        unit,
+        unitPrice,
+        subjectIds: owners,
+        optional: true,
+        notes: 'Batch and shade change between production runs; one spare now is the only way to repair a damaged board later.',
+      });
+    }
   }
 
   // underlay
@@ -712,7 +891,14 @@ export function estimateProject(project: Project): ProjectEstimate {
       exactQuantity: underlay.exactRolls,
       unitPrice,
       subjectIds: underlay.perOwner.map((o) => o.ownerId),
-      notes: `${fmtM2(underlay.totalAreaM2)} to cover; ${fmtM(underlay.stripLengthMm)} of strip off the roll`,
+      notes: [
+        `${fmtM2(underlay.totalAreaM2)} to cover; ${fmtM(underlay.stripLengthMm)} of strip off the roll`,
+        underlay.rollShortfall > 0
+          ? `rounded down from ${underlay.exactRolls} rolls — ${fmtM(underlay.rollShortfall)} to make up from offcuts`
+          : undefined,
+      ]
+        .filter((n): n is string => n !== undefined)
+        .join('; '),
     });
   }
   // hard floor underlay, merged per pack size
@@ -728,15 +914,17 @@ export function estimateProject(project: Project): ProjectEstimate {
       byCoverage.set(cov, acc);
     }
     for (const [cov, acc] of byCoverage) {
+      const { units, shortfall } = wholeUnitsWithTolerance(acc.areaM2, cov);
       bom.add({
         id: `underlay:hardfloor:${cov}`,
         category: 'underlay',
         description: `Hard floor underlay, ${cov} m² packs`,
-        quantity: wholeUnits(acc.areaM2, cov),
+        quantity: units,
         unit: 'pack',
         exactQuantity: cov > 0 ? acc.areaM2 / cov : 0,
+        unitPrice: prices.materials.hardFloorUnderlayPerPack,
         subjectIds: acc.owners,
-        notes: `${fmtM2(acc.areaM2)} incl. trimming allowance`,
+        notes: `${fmtM2(acc.areaM2)} incl. trimming allowance${shortfall > 0 ? `; ${fmtM2(shortfall)} to come out of the offcuts` : ''}`,
       });
     }
   }
@@ -748,17 +936,26 @@ export function estimateProject(project: Project): ProjectEstimate {
       const lengths = owners.reduce((s, o) => s + o.lengths, 0);
       if (lengths <= 0) continue;
       const mm = gripper.byPin[pin];
-      const packs = wholeUnits(lengths, opts.accessories.gripperPerPack);
+      const perPack = opts.accessories.gripperPerPack;
+      // Quantity, unit and price on ONE basis. Where gripper is sold in packs the order is packs —
+      // it used to quote 63 lengths at the per-length price and then tell you to buy 7 packs of 10.
+      const byPack = perPack > 1;
+      const { units, shortfall } = byPack ? wholeUnitsWithTolerance(lengths, perPack) : { units: lengths, shortfall: 0 };
+      const spare = byPack ? units * perPack - lengths : 0;
       bom.add({
         id: `gripper:${pin}`,
         category: 'gripper',
-        description: `Carpet gripper, ${pin} pin, ${fmtM(opts.accessories.gripperLength)} lengths`,
-        quantity: lengths,
-        unit: 'length',
-        exactQuantity: opts.accessories.gripperLength > 0 ? mm / opts.accessories.gripperLength : 0,
-        unitPrice: prices.materials.gripperPerLength,
+        description: byPack
+          ? `Carpet gripper, ${pin} pin, packs of ${perPack} x ${fmtM(opts.accessories.gripperLength)}`
+          : `Carpet gripper, ${pin} pin, ${fmtM(opts.accessories.gripperLength)} lengths`,
+        quantity: units,
+        unit: byPack ? 'pack' : 'length',
+        exactQuantity: byPack ? lengths / perPack : opts.accessories.gripperLength > 0 ? mm / opts.accessories.gripperLength : 0,
+        unitPrice: byPack ? prices.materials.gripperPerPack : prices.materials.gripperPerLength,
         subjectIds: owners.map((o) => o.ownerId),
-        notes: `${fmtM(mm)} incl. ${fmtPct(opts.accessories.gripperWastage)} wastage; ${packs} pack${packs === 1 ? '' : 's'} of ${opts.accessories.gripperPerPack}`,
+        notes: `${fmtM(mm)} incl. ${fmtPct(opts.accessories.gripperWastage)} wastage = ${lengths} length${lengths === 1 ? '' : 's'}${
+          byPack ? ` (${units * perPack} in ${units} pack${units === 1 ? '' : 's'}${spare > 0 ? `, ${spare} spare` : ''})` : ''
+        }${shortfall > 0 ? `; ${Math.ceil(shortfall)} length${Math.ceil(shortfall) === 1 ? '' : 's'} short — make it up from offcuts or add a pack` : ''}`,
       });
     }
   }
@@ -813,16 +1010,17 @@ export function estimateProject(project: Project): ProjectEstimate {
       byLength.set(len, acc);
     }
     for (const [len, acc] of byLength) {
+      const { units, shortfall } = wholeUnitsWithTolerance(acc.mm, len);
       bom.add({
         id: `trims:beading:${len}`,
         category: 'trims',
         description: `Beading / scotia, ${fmtM(len)} lengths`,
-        quantity: wholeUnits(acc.mm, len),
+        quantity: units,
         unit: 'length',
         exactQuantity: len > 0 ? acc.mm / len : 0,
         unitPrice: prices.materials.beadingPerLength,
         subjectIds: acc.owners,
-        notes: `${fmtM(acc.mm)} incl. cutting wastage`,
+        notes: `${fmtM(acc.mm)} incl. cutting wastage${shortfall > 0 ? `; the last ${fmtM(shortfall)} comes out of the offcuts` : ''}`,
       });
     }
   }
@@ -861,6 +1059,14 @@ export function estimateProject(project: Project): ProjectEstimate {
   // floor preparation items (materials priced; site work listed without a price)
   for (const item of floorPrep.items) {
     const priceKey = PREP_MATERIAL_PRICE[item.kind];
+    const labour = PREP_LABOUR_RATE[item.kind];
+    const notes = [item.reason];
+    if (!priceKey) {
+      const noCharge = PREP_NO_CHARGE[item.kind];
+      if (noCharge) notes.push(noCharge);
+      else if (labour || PREP_PRICED_AS_LABOUR.includes(item.kind)) notes.push('Priced under labour below.');
+      else notes.push('Included in the fitting rate.');
+    }
     bom.add({
       id: `prep:${item.kind}:${item.required ? 'required' : 'recommended'}:${slug(item.description)}`,
       category: 'floor_preparation',
@@ -870,7 +1076,7 @@ export function estimateProject(project: Project): ProjectEstimate {
       exactQuantity: item.exactQuantity,
       unitPrice: priceKey ? prices.materials[priceKey] : undefined,
       subjectIds: item.ownerIds,
-      notes: item.reason,
+      notes: notes.join(' '),
       optional: !item.required,
     });
   }
@@ -955,6 +1161,33 @@ export function estimateProject(project: Project): ProjectEstimate {
         unitPrice: prices.materials.adhesivePerTub,
         subjectIds: vinylAdhesiveOwners,
         notes: `${roundTo(vinylAdhesiveKg, 2)} kg at ${VINYL_ADHESIVE_M2_PER_KG} m²/kg (fully bonded)`,
+      });
+    }
+  }
+  {
+    // A bonded sheet vinyl seam is not finished until it is cold-welded: the seam sealer closes the
+    // cut edges so water cannot get under the sheet. Only bonded floors get one; a perimeter-stuck
+    // sheet has no seam by definition (it is fully bonded as soon as it is seamed).
+    let weldMm = 0;
+    const weldOwners: Id[] = [];
+    for (const r of vinylRooms) {
+      const sundries = vinylSundries[r.room.id];
+      if (!sundries || sundries.adhesiveKg <= 0) continue;
+      const mm = sumSeamLength(seamsFor(r));
+      if (mm <= 0) continue;
+      weldMm += mm;
+      weldOwners.push(r.room.id);
+    }
+    if (weldMm > 0) {
+      bom.add({
+        id: 'adhesive:vinyl_seam_weld',
+        category: 'adhesives_tapes',
+        description: 'Vinyl cold weld / seam sealer',
+        quantity: roundTo(weldMm / MM_PER_M, 2),
+        unit: 'm',
+        unitPrice: prices.materials.vinylSeamWeldPerM,
+        subjectIds: weldOwners,
+        notes: 'Every seam in a bonded sheet vinyl is welded; an unwelded seam lets water under the floor.',
       });
     }
   }
@@ -1068,6 +1301,28 @@ export function estimateProject(project: Project): ProjectEstimate {
       perM2('disposal', 'Disposal of old floor covering', ['disposal'], prices.labour.disposalPerM2, required);
       perM2('latex', 'Apply smoothing compound', ['latex'], prices.labour.latexPerM2, required);
       perM2('ply', 'Lay ply / hardboard overlay', ['ply', 'hardboard'], prices.labour.plyPerM2, required);
+      const perOwnQuantity = (id: string, description: string, kind: PrepItemKind, unit: string, rateKey: keyof PriceBook['labour']) => {
+        const items = byKind([kind], required);
+        const quantity = roundTo(
+          items.reduce((sum, i) => sum + i.quantity, 0),
+          2,
+        );
+        if (quantity <= 0) return;
+        bom.add({
+          id: `labour:${id}${required ? '' : ':recommended'}`,
+          category: 'labour',
+          description,
+          quantity,
+          unit,
+          unitPrice: prices.labour[rateKey],
+          subjectIds: Array.from(new Set(items.flatMap((i) => i.ownerIds))),
+          optional: !required,
+        });
+      };
+      for (const [kind, spec] of Object.entries(PREP_LABOUR_RATE) as [PrepItemKind, { key: keyof PriceBook['labour']; description: string }][]) {
+        const unit = kind === 'gripper_removal' || kind === 'skirting_refit' ? 'm' : kind === 'moisture_test' ? 'each' : 'm²';
+        perOwnQuantity(kind, spec.description, kind, unit, spec.key);
+      }
       const easing = byKind(['door_easing'], required);
       const doors = easing.reduce((s, i) => s + i.quantity, 0);
       if (doors > 0) {
@@ -1097,6 +1352,24 @@ export function estimateProject(project: Project): ProjectEstimate {
         unit: 'm',
         unitPrice: prices.labour.bindingPerM,
         subjectIds: bound.map((s) => s.staircase.id),
+      });
+    }
+  }
+
+  // labour: a job is never charged less than the minimum, however small it is
+  {
+    const labourSoFar = money(bom.lines.filter((l) => l.category === 'labour').reduce((s, l) => s + (l.total ?? 0), 0));
+    const minimum = prices.labour.minimumJobLabour;
+    if (minimum > 0 && labourSoFar > 0 && labourSoFar < minimum) {
+      bom.add({
+        id: 'labour:minimum',
+        category: 'labour',
+        description: 'Minimum job charge',
+        quantity: 1,
+        unit: 'each',
+        unitPrice: money(minimum - labourSoFar),
+        subjectIds: plannedRooms.map((r) => r.room.id),
+        notes: `The work above prices at ${prices.currency} ${labourSoFar.toFixed(2)} of labour, under the ${prices.currency} ${money(minimum).toFixed(2)} minimum for a visit. A small room is still most of a day once the floor is prepared and cut in.`,
       });
     }
   }

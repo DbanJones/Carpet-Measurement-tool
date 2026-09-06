@@ -12,6 +12,7 @@
  */
 import { estimateProject, compareRollWidths, dedupeWarnings, buildUpChange, fittingLabour } from './estimate';
 import { emptyProject, sampleProject, SAMPLE_IDS } from './fixtures';
+import { OVER_RUN_TOLERANCE, wholeUnitsWithTolerance } from './accessories';
 import { CARPET_MAX_ROLL_LENGTH, VINYL_MAX_ROLL_LENGTH, CUT_INCREMENT, DEFAULT_PRICES, DEFAULT_UNDERLAY } from './defaults';
 import type { BomCategory, BomLine, BroadloomProduct, Mm, PackProduct, Project, Room, Staircase, Step, Subfloor, Warning } from './types';
 
@@ -162,7 +163,8 @@ describe('sampleProject(): a whole house end to end', () => {
     expect(stairs.gripperLength).toBeGreaterThan(0); // two lengths per step (tread + riser)
     expect(stairs.underlayAreaM2).toBeGreaterThan(0);
     expect(stairs.bindingLength).toBe(0); // closed strings both sides: nothing to bind
-    expect(stairs.warnings).toEqual([]);
+    // the flight's own subfloor now reaches the floor-prep rules, so it carries their notes
+    expect(stairs.warnings.map((w) => w.level)).not.toContain('error');
   });
 
   it('keeps every specialist plan in details for the UI', () => {
@@ -312,8 +314,10 @@ describe('bill of materials', () => {
   it('has at least one line in every category this house needs', () => {
     const expected: BomCategory[] = ['floor_covering', 'underlay', 'gripper', 'door_bars', 'trims', 'floor_preparation', 'adhesives_tapes', 'labour'];
     for (const category of expected) expect(byCategory(category).length).toBeGreaterThan(0);
-    // one covering line per product in use: four carpets/vinyls + laminate + LVT
-    expect(byCategory('floor_covering')).toHaveLength(6);
+    // one covering line per product in use (four carpets/vinyls + laminate + LVT), plus the
+    // recommended spare pack the two pack products each carry
+    expect(byCategory('floor_covering').filter((l) => !l.id.endsWith(':spare'))).toHaveLength(6);
+    expect(byCategory('floor_covering').filter((l) => l.id.endsWith(':spare'))).toHaveLength(2);
   });
 
   it('never lists a zero, negative or non-finite quantity', () => {
@@ -325,8 +329,10 @@ describe('bill of materials', () => {
       expect(line.description.length).toBeGreaterThan(0);
       if (line.exactQuantity !== undefined) {
         expect(Number.isFinite(line.exactQuantity)).toBe(true);
-        // whole units are rounded UP from the exact requirement
-        expect(line.quantity).toBeGreaterThanOrEqual(line.exactQuantity - 1e-6);
+        // Whole units round UP from the exact requirement, except within OVER_RUN_TOLERANCE, where
+        // the last few per cent of a pack or roll comes out of the offcuts instead (and the note
+        // says so). 3.008 packs of laminate is three packs, not four.
+        expect(line.quantity).toBeGreaterThanOrEqual(line.exactQuantity * (1 - OVER_RUN_TOLERANCE) - 1e-6);
       }
     }
   });
@@ -386,19 +392,29 @@ describe('bill of materials', () => {
     const lounge = est.bom.find((l) => l.id === `bom:covering:${P.loungeCarpet}`)!;
     expect(lounge.quantity).toBe(5.4);
     expect(lounge.total).toBe(388.8);
-    // kitchen vinyl: 6.0 lm of £16/m² 3 m vinyl = £48/lm -> £288
+    // kitchen vinyl: 7.4 lm of £16/m² 3 m vinyl = £48/lm -> £355.20 (no cross joins in vinyl)
     const vinyl = est.bom.find((l) => l.id === `bom:covering:${P.kitchenVinyl}`)!;
     expect(vinyl.unitPrice).toBe(48);
-    expect(vinyl.total).toBe(288);
+    expect(vinyl.quantity).toBe(7.4);
+    expect(vinyl.total).toBe(355.2);
   });
 
   it('charges pack floors by the pack', () => {
-    // box room 6.24 m² + 7% straight-lay wastage = 6.677 m²; 6.677 / 2.22 = 3.01 -> 4 packs x £24
+    // box room 6.24 m² + 7% straight-lay wastage = 6.677 m²; 6.677 / 2.22 = 3.008 packs. The 0.8%
+    // overrun is inside OVER_RUN_TOLERANCE, so it is THREE packs (6.66 m²) and 0.02 m² out of the
+    // offcuts — not a fourth pack, 42% over the floor area, for a rounding error.
     const laminate = est.bom.find((l) => l.id === `bom:covering:${P.laminate}`)!;
     expect(laminate.unit).toBe('pack');
-    expect(laminate.quantity).toBe(4);
+    expect(laminate.quantity).toBe(3);
     expect(laminate.exactQuantity).toBeCloseTo(3.0075, 3);
-    expect(laminate.total).toBe(96);
+    expect(laminate.total).toBe(72);
+    // the note says what is BOUGHT, not only the intermediate gross area
+    expect(laminate.notes).toContain('6.66 m² bought for 6.24 m² of floor');
+    expect(laminate.notes).toContain('offcuts');
+    // and a spare pack is offered separately rather than hidden in the rounding
+    const spare = est.bom.find((l) => l.id === `bom:covering:${P.laminate}:spare`)!;
+    expect(spare.quantity).toBe(1);
+    expect(spare.total).toBeUndefined();
     // bathroom 4.18 m² + 7% = 4.473 m²; 4.473 / 3.29 = 1.36 -> 2 packs x £65
     const lvt = est.bom.find((l) => l.id === `bom:covering:${P.lvt}`)!;
     expect(lvt.quantity).toBe(2);
@@ -411,8 +427,12 @@ describe('bill of materials', () => {
     expect(underlay.subjectIds).toContain(STAIRS); // the stair pads come off the same rolls
     expect(underlay.total).toBe(money(underlay.quantity * DEFAULT_UNDERLAY.pricePerRoll!));
 
+    // gripper is sold in packs of ten, so the quantity, the unit and the price are all per pack:
+    // the line used to quote 63 lengths at the per-length price and then say "7 packs of 10".
     const gripper = est.bom.find((l) => l.id === 'bom:gripper:timber')!;
-    expect(gripper.unit).toBe('length');
+    expect(gripper.unit).toBe('pack');
+    expect(gripper.unitPrice).toBe(DEFAULT_PRICES.materials.gripperPerPack);
+    expect(gripper.total).toBe(money(gripper.quantity * DEFAULT_PRICES.materials.gripperPerPack));
     expect(gripper.notes).toContain('10% wastage');
     expect(gripper.subjectIds).toContain(STAIRS);
     // no concrete-pin gripper: every carpeted room in the sample is on timber
@@ -427,9 +447,10 @@ describe('bill of materials', () => {
     expect(ramps.category).toBe('trims');
     expect(ramps.quantity).toBe(2);
     expect(ramps.unitPrice).toBe(DEFAULT_PRICES.materials.thresholdPerItem);
-    // seam tape only where there are seams
+    // seam tape only where there are seams: with the planner no longer seaming a room for nothing,
+    // the lounge, landing and bedroom 2 come out in one piece and only bedroom 1 carries a seam
     const seamTape = est.bom.find((l) => l.id === 'bom:tape:seam')!;
-    expect(seamTape.subjectIds.sort()).toEqual([R.bedroom2, R.landing, R.lounge].sort());
+    expect(seamTape.subjectIds).toEqual([R.bedroom1]);
   });
 
   it('charges fitting per m² by covering kind, and the stairs per step', () => {
@@ -838,5 +859,176 @@ describe('fittingLabour', () => {
     const tiles = fittingLabour('carpet_tiles', labour);
     expect(tiles.rate).toBe(labour.carpetFittingPerM2);
     expect(tiles.note).toBeDefined();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Regressions: things the quote used to get wrong
+// ---------------------------------------------------------------------------
+
+describe('regressions', () => {
+  const carpet: BroadloomProduct = { id: 'c', name: 'Carpet 4 m', kind: 'carpet', rollWidth: 4000, cutIncrement: CUT_INCREMENT, maxRollLength: CARPET_MAX_ROLL_LENGTH, thickness: 10, pricePerM2: 18 };
+
+  function house(rooms: Room[], staircases: Staircase[] = [], products: Project['products'] = [carpet]): Project {
+    const p = emptyProject('reg');
+    p.products = products;
+    p.rooms = rooms;
+    p.staircases = staircases;
+    return p;
+  }
+
+  const plainRoom = (id: string, name: string, doorways: Room['doorways'] = []): Room => ({
+    id,
+    name,
+    shape: { kind: 'rectangle', length: 3000, width: 3000 },
+    doorways,
+    productId: 'c',
+    subfloor: { type: 'floorboards', condition: 'good' },
+  });
+
+  it('buys one bar per opening however the doorways are labelled', () => {
+    // Four rooms built the way the app builds them, all with a doorway the user called "Door".
+    // Matching on the label used to collapse them into a single bar and drop three doorways.
+    const rooms = ['1', '2', '3', '4'].map((n) =>
+      plainRoom(`r${n}`, `Room ${n}`, [{ id: `d${n}`, edgeIndex: 0, offset: 200, width: 900, transition: 'carpet', label: 'Door' }]),
+    );
+    const est = estimateProject(house(rooms));
+    expect(est.details.doorBars.standardBars).toBe(4);
+    expect(est.warnings.filter((w) => w.code === 'DOORWAY_SHARED')).toHaveLength(0);
+  });
+
+  it('counts an opening entered from both rooms once, for the bar AND the door easing', () => {
+    const hall = plainRoom('hall', 'Hall', [{ id: 'd1', edgeIndex: 0, offset: 200, width: 838, transition: 'carpet', sharedOpeningId: 'op', label: 'Lounge door' }]);
+    const lounge = plainRoom('lng', 'Lounge', [{ id: 'd2', edgeIndex: 0, offset: 200, width: 838, transition: 'carpet', sharedOpeningId: 'op', label: 'Hall door' }]);
+    const est = estimateProject(house([hall, lounge]));
+    expect(est.details.doorBars.standardBars).toBe(1);
+    expect(est.details.doorBars.bars).toHaveLength(1);
+  });
+
+  it('reports a doorway whose wall no longer exists and leaves it out of the quantities', () => {
+    // an 8-wall room converted to a rectangle leaves stale edge indices behind
+    const room = plainRoom('r', 'Room', [{ id: 'd', edgeIndex: 6, offset: 100, width: 900, transition: 'carpet', label: 'Ghost door' }]);
+    const est = estimateProject(house([room]));
+    expect(est.warnings.map((w) => w.code)).toContain('DOORWAY_OFF_EDGE');
+    // no bar is bought for it, and the gripper runs the whole perimeter
+    expect(est.details.doorBars.bars).toHaveLength(0);
+    expect(est.rooms.r!.gripperPerimeter).toBe(12000);
+  });
+
+  it('flags two openings that overlap on one wall and counts the hole once', () => {
+    const room = plainRoom('r', 'Room', [
+      { id: 'a', edgeIndex: 0, offset: 100, width: 900, transition: 'carpet' },
+      { id: 'b', edgeIndex: 0, offset: 200, width: 900, transition: 'carpet' },
+    ]);
+    const est = estimateProject(house([room]));
+    expect(est.warnings.map((w) => w.code)).toContain('DOORWAY_OVERLAP');
+    expect(est.rooms.r!.gripperPerimeter).toBe(12000 - 1000);
+  });
+
+  it('reports an outline that crosses itself instead of quoting it', () => {
+    const room: Room = {
+      id: 'r',
+      name: 'Bowtie',
+      shape: {
+        kind: 'polygon',
+        points: [
+          { x: 0, y: 0 },
+          { x: 4000, y: 0 },
+          { x: 1000, y: 3000 },
+          { x: 3000, y: 3000 },
+        ],
+      },
+      doorways: [],
+      productId: 'c',
+      subfloor: { type: 'floorboards', condition: 'good' },
+    };
+    const est = estimateProject(house([room]));
+    expect(est.warnings.map((w) => w.code)).toContain('SELF_INTERSECTING');
+    expect(est.rollPlans).toHaveLength(0);
+  });
+
+  it('warns when a recess is deeper than the room rather than over-ordering from a broken outline', () => {
+    const room: Room = {
+      id: 'r',
+      name: 'Lounge',
+      shape: { kind: 'rectangle_with_features', length: 4000, width: 3000, features: [{ id: 'f', wall: 'bottom', offset: 1000, width: 1400, depth: -3500, label: 'Chimney breast' }] },
+      doorways: [],
+      productId: 'c',
+      subfloor: { type: 'floorboards', condition: 'good' },
+    };
+    const est = estimateProject(house([room]));
+    expect(est.warnings.map((w) => w.code)).toContain('FEATURE_TOO_DEEP');
+    // the outline is clamped to the room, so the bounding box is not 500 mm too deep
+    expect(est.rooms.r!.boundingBox.width).toBe(3000);
+  });
+
+  it('does not hang, and reports an error, when a product has no roll width', () => {
+    const est = estimateProject(house([plainRoom('r', 'Room')], [], [{ ...carpet, rollWidth: 0 }]));
+    expect(est.warnings.map((w) => w.code)).toContain('INVALID_ROLL_WIDTH');
+    expect(est.totals.total).toBeGreaterThanOrEqual(0);
+  });
+
+  it('surfaces a line it cannot quantify instead of dropping it silently', () => {
+    // a non-finite allowance used to make every piece NaN: the carpet line vanished, the quote still
+    // totalled up underlay, gripper and fitting labour, and not one warning was raised.
+    const p = house([plainRoom('r', 'Room')]);
+    p.options.broadloom = { ...p.options.broadloom, lengthAllowance: Number.NaN };
+    const est = estimateProject(p);
+    expect(est.warnings.some((w) => w.level === 'error')).toBe(true);
+    expect(est.bom.every((l) => Number.isFinite(l.quantity) && l.quantity > 0)).toBe(true);
+  });
+
+  it('strips, skips and pulls the gripper on the stairs as well as the rooms', () => {
+    const stairs: Staircase = {
+      id: 'st',
+      name: 'Stairs',
+      productId: 'c',
+      steps: Array.from({ length: 13 }, (_, i) => ({ id: `s${i + 1}`, kind: 'straight', rise: 200, going: 223, width: 860 }) as Step),
+      landings: [],
+      method: 'cap_and_band',
+      openSides: 'none',
+      subfloor: { type: 'floorboards', condition: 'good', existingCovering: 'carpet', existingGripper: true },
+    };
+    const est = estimateProject(house([], [stairs]));
+    const uplift = est.bom.find((l) => l.id === 'bom:labour:uplift')!;
+    expect(uplift.subjectIds).toContain('st');
+    expect(uplift.quantity).toBeGreaterThan(0);
+    expect(est.bom.find((l) => l.id === 'bom:labour:disposal')!.subjectIds).toContain('st');
+    // and the old stair gripper is a line of its own rather than a £0 entry
+    const removal = est.bom.find((l) => l.id.startsWith('bom:labour:gripper_removal'))!;
+    expect(removal.unitPrice).toBe(DEFAULT_PRICES.labour.gripperRemovalPerM);
+  });
+
+  it('never lists a required item with no price and no labour counterpart', () => {
+    const est = estimateProject(sampleProject());
+    for (const line of est.bom) {
+      if (line.notes?.startsWith('Recommended')) continue;
+      const priced = line.total !== undefined;
+      const explained = line.notes?.includes('Priced under labour below.') || line.notes?.includes('No charge') || line.notes?.includes('Included in the fitting rate.');
+      expect([line.description, priced || explained]).toEqual([line.description, true]);
+    }
+  });
+
+  it('reports the sample lounge and kitchen as seam-free at the width that suits them', () => {
+    const project = sampleProject();
+    const lounge = compareRollWidths(project, P.loungeCarpet);
+    expect(lounge.find((r) => r.rollWidth === 4000)!.seams).toBe(0);
+    const kitchen = compareRollWidths(project, P.kitchenVinyl);
+    expect(kitchen.find((r) => r.rollWidth === 4000)!.seams).toBe(0);
+    // and every row's seam count matches what that width's plan actually cuts
+    for (const row of lounge) expect(row.seams).toBeGreaterThanOrEqual(0);
+  });
+
+  it('makes up a small over-run from the offcuts instead of buying another whole unit', () => {
+    // 4.02 rolls of underlay used to buy FIVE: a 15 m² roll to supply 219 mm.
+    const over = wholeUnitsWithTolerance(44_219, 11_000);
+    expect(over.units).toBe(4);
+    expect(over.shortfall).toBeCloseTo(219, 6);
+    // a real shortfall still rounds up
+    expect(wholeUnitsWithTolerance(48_000, 11_000)).toEqual({ units: 5, shortfall: 0 });
+    // and the first unit is never rounded away
+    expect(wholeUnitsWithTolerance(100, 11_000)).toEqual({ units: 1, shortfall: 0 });
+    expect(wholeUnitsWithTolerance(0, 11_000)).toEqual({ units: 0, shortfall: 0 });
   });
 });

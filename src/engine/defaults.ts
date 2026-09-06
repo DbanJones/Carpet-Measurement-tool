@@ -28,6 +28,14 @@ export const DEFAULT_BROADLOOM_OPTIONS: BroadloomPlanningOptions = {
   minFillWidth: 300, // never plan a sliver narrower than ~1 ft (MeasureSquare convention)
   maxCrossJoinsPerFill: 2, // a fill may be at most three strips joined end to end
 };
+/**
+ * Sheet vinyl fills are never planned narrower than this. A 300 mm strip of cushioned vinyl curls,
+ * cannot be rolled flat into an adhesive bed and leaves a seam within a footstep of the wall, so
+ * vinyl gets a wider floor than carpet's `minFillWidth`.
+ */
+export const VINYL_MIN_FILL_WIDTH: Mm = 600;
+/** Sheet vinyl is never cross-joined: a butt joint across a floor is a leak path (see rollplan.applyCrossJoins). */
+export const VINYL_ALLOWS_CROSS_JOINS = false;
 
 // ---- Underlay ---------------------------------------------------------------------------------
 export const DEFAULT_UNDERLAY: UnderlayOptions = {
@@ -67,6 +75,7 @@ export const DEFAULT_FLOOR_PREP: FloorPrepOptions = {
   latexWastage: 0.1,
   primerCoverageM2PerLitre: 20, // concentrate: a 5 L can covers ~100 m² diluted 1:4 on porous floors
   primerCoats: 1,
+  primerCanLitres: 5, // primer is sold in sealed 5 L cans, not by the litre
   plySheetLength: 2440,
   plySheetWidth: 1220, // 2.977 m², 6 mm flooring-grade WBP
   plyWastage: 0.1,
@@ -134,6 +143,13 @@ export const RUNNER_END_ALLOWANCE: Mm = 300;
 export const RUNNER_DEFAULT_WIDTH: Mm = 600;
 /** Gripper per step: one length on the tread (back) and one on the riser (bottom). */
 export const GRIPPER_PER_STEP = 2;
+/**
+ * How far a stair underlay pad wraps over the nosing. UK practice is a pad per TREAD only — the
+ * risers are left bare so the carpet pulls tight against them — with the pad running about 50 mm
+ * over the nose so there is padding where the foot lands. Set `Staircase.underlayRisers` for the
+ * full-flight (waterfall) build-up instead.
+ */
+export const PAD_NOSING_OVERLAP: Mm = 50;
 
 // ---- Pricing (indicative UK 2025/26; user editable) -------------------------------------------
 export const DEFAULT_PRICES: PriceBook = {
@@ -152,12 +168,18 @@ export const DEFAULT_PRICES: PriceBook = {
     plyPerM2: 14,
     doorEasingPerDoor: 15,
     bindingPerM: 6.5, // whipping; taped binding is ~£12/m
+    minimumJobLabour: 180, // a fitter's minimum charge for a visit (UK typically £150-£200)
+    gripperRemovalPerM: 1.5,
+    boardPrepPerM2: 4,
+    skirtingRefitPerM: 6,
+    moistureTestPerTest: 25,
   },
   materials: {
     gripperPerLength: 1.2,
+    gripperPerPack: 11, // a pack of 10 lengths at a small pack discount on 10 x £1.20
     doorBarPerBar: 8,
     latexPerBag: 20,
-    primerPerLitre: 7,
+    primerPerCan: 30, // a 5 L can of acrylic primer concentrate
     plyPerSheet: 20,
     hardboardPerSheet: 8,
     liquidDpmPerKg: 12,
@@ -165,6 +187,7 @@ export const DEFAULT_PRICES: PriceBook = {
     seamTapePerRoll: 10,
     doubleSidedTapePerRoll: 8,
     underlayTapePerRoll: 5,
+    hardFloorUnderlayPerPack: 22, // 15 m² foam/foil roll with an integral DPM
     beadingPerLength: 6,
     thresholdPerItem: 15,
     stairNosingPerItem: 30,
@@ -172,6 +195,7 @@ export const DEFAULT_PRICES: PriceBook = {
     adhesivePerTub: 45,
     tackifierPerTub: 30,
     plyScrewsPerBox: 8,
+    vinylSeamWeldPerM: 3, // cold weld / seam sealer, per metre of welded seam
   },
 };
 export const PLY_SCREWS_PER_BOX = 200;

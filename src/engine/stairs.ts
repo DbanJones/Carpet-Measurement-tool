@@ -18,7 +18,9 @@
  *   a fully fitted bullnose / curtail step is also cut on its own because the wrap round the curved
  *   end cannot be made from a continuous strip. Winders are always individual pieces.
  * - `topRiserByLanding`: the landing carpet runs over the top nosing and down the top riser; the
- *   stairs stop one riser short and the top landing piece gains rise + nosing + tuck.
+ *   stairs stop one riser short and ONE landing at the head of the flight gains rise + nosing + tuck.
+ * - Underlay is a pad per TREAD (going + `PAD_NOSING_OVERLAP`), not a continuous strip down the
+ *   flight; `underlayRisers` switches to the full-flight build-up.
  * - A runner is a strip of fixed width (no string or wrap allowances) bound on both edges, with a
  *   stair rod per step if wanted.
  *
@@ -42,6 +44,7 @@ import {
   RUNNER_END_ALLOWANCE,
   RUNNER_DEFAULT_WIDTH,
   GRIPPER_PER_STEP,
+  PAD_NOSING_OVERLAP,
   STAIR_REGS,
   MAX_UNDERLAY_THICKNESS_ON_STAIRS,
 } from './defaults';
@@ -197,8 +200,10 @@ interface StepGeo {
   going: Mm;
   width: Mm;
   wrapLength: Mm;
-  /** rise + going (top step: rise) — the surface actually clad, without the nosing wrap. Drives underlay pads and hard floor area. */
+  /** rise + going (top step: rise) — the surface actually clad, without the nosing wrap. Drives the hard floor area. */
   cladLength: Mm;
+  /** Length of this step's underlay pad: the tread plus the nosing overlap, or the whole clad length when the risers are padded too. Zero where there is no pad. */
+  padLength: Mm;
   /** Width the covering actually spans: the tread width, or the runner width. */
   coverWidth: Mm;
   /** Cut width incl. tuck / wrap allowances (runner: the runner width, no allowances). */
@@ -251,13 +256,15 @@ function emptyPlan(sid: Id, warnings: Warning[]): StairPlan {
  * - wrap per step = 200 + 223 + 20 = 443; top step = 200 + 20 = 220
  * - piece = (443 + 30 + 75) x (860 + 100) = 548 x 960 mm for steps 1–12; top step 325 x 960
  * - net area = 12 x 443 x 860 + 220 x 860 = 4 760 960 mm² (4.76 m²)
- * - gripper = ceil(13 steps x 2 lengths x 860 x 1.10) = 24 596 mm
- * - underlay = 12 pads of 423 x 860 + one of 200 x 860 = 4.53736 m², 13 pads
+ * - gripper = ceil((12 steps x 2 + top riser x 1) x 860 x 1.10) = 23 650 mm (the top step has no
+ *   tread of its own, so only its riser foot is gripped)
+ * - underlay = 12 tread pads of (223 going + 50 nosing overlap) x 860 = 2.81736 m², 12 pads. With
+ *   `underlayRisers` it is the whole flight instead: 12 x 423 x 860 + 200 x 860 = 4.53736 m².
  * As a waterfall the same flight is ONE piece 12 x 473 + 250 + 300 = 6 226 x 960 mm.
  * As a 600 mm runner (waterfall) it is 6 226 x 600 with 2 x 6 226 + 2 x 600 = 13 652 mm of binding
- * and gripper ceil(13 x 2 x 600 x 1.10) = 17 160 mm.
- * In laminate there are no pieces: 4.53736 m² net, x1.15 = 5.217964 m² gross, 13 nosings totalling
- * 11 180 mm.
+ * and gripper ceil((12 x 2 + 1) x 600 x 1.10) = 16 500 mm.
+ * In laminate there are no pieces: 4.53736 m² of tread and riser clad, x1.15 = 5.217964 m² gross,
+ * 13 nosings totalling 11 180 mm.
  */
 export function planStaircase(input: StairPlanInput): StairPlan {
   const { staircase, product, options, underlay, accessories } = input;
@@ -277,6 +284,8 @@ export function planStaircase(input: StairPlanInput): StairPlan {
   const isPack = !isBroadloom(product.kind);
   const method = staircase.method;
   const nosingOverhang = nonNegative(staircase.nosingOverhang ?? DEFAULT_NOSING_OVERHANG);
+  const padRisers = staircase.underlayRisers === true;
+  const padNosingOverlap = PAD_NOSING_OVERLAP;
   const openCount = sideCount(staircase.openSides);
   const lengthAllowance = nonNegative(options.lengthAllowance);
   const widthAllowance = nonNegative(options.widthAllowance);
@@ -312,9 +321,21 @@ export function planStaircase(input: StairPlanInput): StairPlan {
   // ---- top riser by landing ------------------------------------------------------------------------
   // Only a landing at the head of the flight can run over the top nosing and down the top riser.
   let topRiserByLanding = false;
+  // Only ONE landing can run over the top nosing: the stair carpet stops one riser short once, so
+  // if two landings both sat at the head the riser would be paid for twice. The last one wins.
+  const riserLanding = staircase.topRiserByLanding === true ? landings.filter((l) => l.isTop).at(-1) : undefined;
   if (staircase.topRiserByLanding === true) {
-    if (landings.some((l) => l.isTop)) {
+    if (riserLanding) {
       topRiserByLanding = true;
+      const atHead = landings.filter((l) => l.isTop);
+      if (atHead.length > 1) {
+        warnings.push({
+          level: 'warning',
+          code: 'MULTIPLE_TOP_LANDINGS',
+          message: `${name}: ${atHead.length} landings sit at the head of the flight — only the ${landingLabel(riserLanding.landing.kind).toLowerCase()} carries the top riser; move the others to the step they follow.`,
+          subjectId: sid,
+        });
+      }
     } else {
       warnings.push({
         level: 'info',
@@ -336,6 +357,8 @@ export function planStaircase(input: StairPlanInput): StairPlan {
     if (rise === 0 || width === 0 || (going === 0 && !isTop)) invalid.push(`step ${index + 1}`);
     const wrapLength = stepWrapLength({ rise, going }, nosingOverhang, isTop);
     const cladLength = rise + (isTop ? 0 : going);
+    // Pads go on the treads, wrapped over the nose; the top step has no tread (it is the landing).
+    const padLength = padRisers ? cladLength : isTop ? 0 : going + padNosingOverlap;
     const onStairs = !(isTop && topRiserByLanding);
     const notes: string[] = [];
     const bullnose = fullyFitted ? bullnoseWrapExtra(step) : { extra: 0, sides: 0, projection: 0, assumed: false };
@@ -360,7 +383,7 @@ export function planStaircase(input: StairPlanInput): StairPlan {
     if (fullyFitted && openCount > 0 && !isPack) {
       notes.push(`open ${staircase.openSides === 'both' ? 'strings' : `${staircase.openSides} string`}: +${OPEN_SIDE_WRAP} mm width per side, ${openCount} x ${wrapLength} mm edge bound`);
     }
-    return { step, index, kind: step.kind, isTop, onStairs, rise, going, width, wrapLength, cladLength, coverWidth, pieceWidth, pieceLength, individual, notes };
+    return { step, index, kind: step.kind, isTop, onStairs, rise, going, width, wrapLength, cladLength, padLength, coverWidth, pieceWidth, pieceLength, individual, notes };
   });
 
   if (invalid.length > 0) {
@@ -396,6 +419,7 @@ export function planStaircase(input: StairPlanInput): StairPlan {
   let netAreaMm2 = 0;
   let padAreaMm2 = 0;
   let gripperRaw = 0;
+  let padCount = 0;
   let openEdge = 0;
   let hardAreaMm2 = 0;
   let nosingLength = 0;
@@ -403,14 +427,17 @@ export function planStaircase(input: StairPlanInput): StairPlan {
   for (const g of geos) {
     // the top riser is still carpeted, padded and bound when the landing takes it — it just moves to the landing below
     netAreaMm2 += g.wrapLength * g.coverWidth;
-    padAreaMm2 += g.cladLength * g.coverWidth;
+    padAreaMm2 += g.padLength * g.coverWidth;
+    if (g.onStairs && g.padLength > 0) padCount += 1;
     openEdge += openCount * g.wrapLength;
     hardAreaMm2 += g.cladLength * g.width;
     nosingLength += g.width;
     if (g.onStairs) {
       stairStepCount += 1;
-      // one length on the tread (back) and one on the riser (bottom); a winder's long back edge takes one more
-      gripperRaw += (GRIPPER_PER_STEP + (g.kind === 'winder' ? 1 : 0)) * g.coverWidth;
+      // one length on the tread (back) and one on the riser (bottom); a winder's long back edge takes
+      // one more. The TOP step has no tread of its own (it is the landing), so only its riser foot.
+      const lengthsHere = g.isTop ? 1 : GRIPPER_PER_STEP + (g.kind === 'winder' ? 1 : 0);
+      gripperRaw += lengthsHere * g.coverWidth;
     } else {
       // landing carpet runs over the nosing: only the riser foot needs gripper
       gripperRaw += g.coverWidth;
@@ -470,7 +497,7 @@ export function planStaircase(input: StairPlanInput): StairPlan {
     };
     const emitLanding = (l: LandingGeo) => {
       const id = `${sid}:l${l.k + 1}`;
-      const takesRiser = topRiserByLanding && l.isTop;
+      const takesRiser = topRiserByLanding && l === riserLanding;
       // runs over the top nosing and down the top riser, then tucks at the riser foot
       const riserExtra = takesRiser ? topGeo.wrapLength + STEP_LENGTH_ALLOWANCE : 0;
       const length = roundTo(l.length + lengthAllowance + riserExtra, 0);
@@ -547,7 +574,7 @@ export function planStaircase(input: StairPlanInput): StairPlan {
     }
     if (underlay.fit) {
       underlayAreaM2 = mm2ToM2(padAreaMm2);
-      underlayPads = stairStepCount;
+      underlayPads = padCount;
       if (underlay.thickness > MAX_UNDERLAY_THICKNESS_ON_STAIRS) {
         warnings.push({
           level: 'warning',

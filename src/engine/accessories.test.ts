@@ -14,7 +14,7 @@ import {
   type DoorBarRoom,
   type GripperRoom,
 } from './accessories';
-import { shapeToPolygon } from './geometry';
+import { shapeToPolygon, rectanglePolygon } from './geometry';
 import { DEFAULT_UNDERLAY, DEFAULT_ACCESSORIES, MAX_UNDERLAY_THICKNESS_ON_STAIRS } from './defaults';
 import type { Doorway, DoorwayTransition, Subfloor, SubfloorType, CoveringKind } from './types';
 
@@ -170,7 +170,7 @@ describe('planUnderlay', () => {
 
   it('no areas at all -> zeros and no warnings', () => {
     const plan = planUnderlay({ areas: [], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
-    expect(plan).toEqual({ totalAreaM2: 0, stripLengthMm: 0, rolls: 0, exactRolls: 0, tapeLength: 0, tapeRolls: 0, perOwner: [], warnings: [] });
+    expect(plan).toEqual({ totalAreaM2: 0, stripLengthMm: 0, rolls: 0, exactRolls: 0, rollShortfall: 0, tapeLength: 0, tapeRolls: 0, perOwner: [], warnings: [] });
   });
 
   it('an area with neither outline nor area is skipped with UNDERLAY_NO_AREA; an empty outline is an EMPTY_ROOM error', () => {
@@ -421,12 +421,12 @@ describe('planDoorBars', () => {
     expect(PATIO_DOOR_MIN_WIDTH).toBe(1200);
   });
 
-  it('counts a doorway entered from both rooms once, keeping the first room\'s bar', () => {
+  it('counts an opening entered from both rooms once, keeping the first room\'s bar', () => {
     const plan = planDoorBars({
       rooms: [
-        { ownerId: 'bed', ownerName: 'Bedroom', covering: 'carpet', doorways: [dw(838, 'hard_floor', { id: 'a', label: 'Bedroom Door' })] },
-        { ownerId: 'lnd', ownerName: 'Landing', covering: 'laminate', doorways: [dw(838, 'carpet', { id: 'b', label: ' bedroom door ' }), dw(838, 'carpet', { id: 'c', label: 'Bathroom door' })] },
-        // the same label twice inside one room is two doorways, not a duplicate
+        { ownerId: 'bed', ownerName: 'Bedroom', covering: 'carpet', doorways: [dw(838, 'hard_floor', { id: 'a', label: 'Bedroom Door', sharedOpeningId: 'op-1' })] },
+        { ownerId: 'lnd', ownerName: 'Landing', covering: 'laminate', doorways: [dw(838, 'carpet', { id: 'b', label: 'Bedroom door', sharedOpeningId: 'op-1' }), dw(838, 'carpet', { id: 'c', label: 'Bathroom door' })] },
+        // the same label twice, in one room or across rooms, is NOT a link: only sharedOpeningId is
         { ownerId: 'lng', ownerName: 'Lounge', covering: 'carpet', doorways: [dw(838, 'carpet', { id: 'd', label: 'Door' }), dw(838, 'carpet', { id: 'e', label: 'Door' })] },
       ],
       options: DEFAULT_ACCESSORIES,
@@ -434,7 +434,51 @@ describe('planDoorBars', () => {
     expect(plan.bars.map((b) => b.doorwayId)).toEqual(['a', 'c', 'd', 'e']);
     expect(plan.bars[0]!.type).toBe('single_edge');
     expect(plan.standardBars).toBe(4);
-    expect(plan.warnings).toEqual([{ level: 'info', code: 'DOORWAY_DUPLICATE', message: expect.stringContaining('Bedroom'), subjectId: 'lnd' }]);
+    expect(plan.warnings).toEqual([{ level: 'info', code: 'DOORWAY_SHARED', message: expect.stringContaining('Bedroom'), subjectId: 'lnd' }]);
+  });
+
+  it('never guesses a shared opening from the label: four rooms whose doorway is called "Door" buy four bars', () => {
+    const plan = planDoorBars({
+      rooms: ['r1', 'r2', 'r3', 'r4'].map((id, i) => ({
+        ownerId: id,
+        ownerName: `Room ${i + 1}`,
+        covering: 'carpet' as const,
+        doorways: [dw(900, 'carpet', { id: `${id}-d`, label: 'Door' })],
+      })),
+      options: DEFAULT_ACCESSORIES,
+    });
+    expect(plan.standardBars).toBe(4);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('flags two sides of one opening measured at different widths and uses the first', () => {
+    const plan = planDoorBars({
+      rooms: [
+        { ownerId: 'a', ownerName: 'Hall', covering: 'carpet', doorways: [dw(838, 'carpet', { id: 'a1', sharedOpeningId: 'op' })] },
+        { ownerId: 'b', ownerName: 'Lounge', covering: 'carpet', doorways: [dw(926, 'carpet', { id: 'b1', sharedOpeningId: 'op' })] },
+      ],
+      options: DEFAULT_ACCESSORIES,
+    });
+    expect(plan.bars).toHaveLength(1);
+    expect(plan.bars[0]!.width).toBe(838);
+    expect(plan.warnings.map((w) => w.code)).toEqual(['DOORWAY_SHARED', 'DOORWAY_WIDTH_MISMATCH']);
+  });
+
+  it('sizes the bar from the opening as it lands on the wall when the outline is given', () => {
+    // a 900 mm opening 3 800 mm along a 4 000 mm wall only has 200 mm of wall to sit on
+    const plan = planDoorBars({
+      rooms: [
+        {
+          ownerId: 'r',
+          ownerName: 'Room',
+          covering: 'carpet',
+          polygon: rectanglePolygon(4000, 3000),
+          doorways: [{ id: 'd', edgeIndex: 0, offset: 3800, width: 900, transition: 'carpet' }],
+        },
+      ],
+      options: DEFAULT_ACCESSORIES,
+    });
+    expect(plan.bars[0]!.width).toBe(200);
   });
 
   it('no rooms / no doorways -> empty totals with every type present', () => {

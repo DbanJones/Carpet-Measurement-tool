@@ -12,7 +12,16 @@ import {
   normalizePolygon,
   pointInPolygon,
   extentOverRange,
+  applyWallFeatures,
+  doorwayProblem,
+  edgeLength,
+  hasOverlappingDoorways,
+  isSimplePolygon,
+  normalizeEdgeIndex,
+  openingLength,
+  rectanglePolygon,
 } from './geometry';
+import type { Doorway } from './types';
 
 describe('shapeToPolygon', () => {
   it('rectangle 4.2 x 3.5 m', () => {
@@ -158,5 +167,67 @@ describe('clipping and doorways', () => {
     expect(pointInPolygon({ x: 1000, y: 1000 }, p)).toBe(true);
     expect(pointInPolygon({ x: 5000, y: 500 }, p)).toBe(false);
     expect(pointInPolygon({ x: 0, y: 0 }, p)).toBe(true);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Outlines and doorways that the UI can produce but the engine used to mishandle
+// ---------------------------------------------------------------------------
+
+describe('bad doorway positions', () => {
+  const rect = rectanglePolygon(4000, 3000);
+
+  it('a negative edge index is wrapped, not read off the end of the array', () => {
+    // poly[-1] is undefined and the non-null assertions downstream used to throw out of the whole
+    // estimate; DoorwaysEditor writes -1 for "the wall this used to sit on is gone".
+    expect(normalizeEdgeIndex(rect, -1)).toBe(3);
+    expect(normalizeEdgeIndex(rect, 7)).toBe(3);
+    expect(() => edgeLength(rect, -1)).not.toThrow();
+    expect(edgeLength(rect, -1)).toBe(3000);
+    expect(fixingPerimeter(rect, [{ id: 'd', edgeIndex: -1, offset: 100, width: 900, transition: 'carpet' }])).toBe(14000 - 900);
+  });
+
+  it('reports a doorway whose wall no longer exists rather than reattaching it to another', () => {
+    expect(doorwayProblem(rect, { id: 'd', edgeIndex: 5, offset: 100, width: 900, transition: 'carpet' })).toBe('no_such_edge');
+    expect(doorwayProblem(rect, { id: 'd', edgeIndex: -1, offset: 100, width: 900, transition: 'carpet' })).toBe('no_such_edge');
+    // starts past the end of a 3 m wall
+    expect(doorwayProblem(rect, { id: 'd', edgeIndex: 1, offset: 3500, width: 900, transition: 'carpet' })).toBe('past_edge_end');
+    expect(doorwayProblem(rect, { id: 'd', edgeIndex: 0, offset: 100, width: 900, transition: 'carpet' })).toBeNull();
+  });
+
+  it('merges openings that overlap on one wall instead of deducting them twice', () => {
+    const a: Doorway = { id: 'a', edgeIndex: 0, offset: 100, width: 900, transition: 'carpet' };
+    const b: Doorway = { id: 'b', edgeIndex: 0, offset: 200, width: 900, transition: 'carpet' };
+    // 100–1000 and 200–1100 are one 1000 mm hole, not 1800 mm of hole
+    expect(openingLength(rect, [a, b])).toBe(1000);
+    expect(fixingPerimeter(rect, [a, b])).toBe(14000 - 1000);
+    expect(hasOverlappingDoorways(rect, [a, b])).toBe(true);
+    // openings on different walls, and openings that merely touch, are not overlaps
+    expect(hasOverlappingDoorways(rect, [a, { ...b, edgeIndex: 2 }])).toBe(false);
+    expect(openingLength(rect, [a, { ...b, offset: 1000 }])).toBe(1800);
+  });
+});
+
+describe('outlines that cross themselves', () => {
+  it('clamps a recess deeper than the room instead of building a bowtie', () => {
+    // 4 x 3 m room with a 3.5 m deep chimney breast on the 3 m axis: the wall would come out through
+    // the far side, cancelling part of the shoelace area and growing the bounding box.
+    const poly = normalizePolygon(applyWallFeatures(4000, 3000, [{ id: 'f', wall: 'bottom', offset: 1000, width: 1400, depth: -3500 }]));
+    expect(isSimplePolygon(poly)).toBe(true);
+    expect(boundingBox(poly).width).toBe(3000); // not 3500
+    expect(polygonAreaM2(poly)).toBeCloseTo(7.8, 6); // clamped area, not the 7.1 the bowtie reported
+  });
+
+  it('isSimplePolygon spots a crossed outline', () => {
+    expect(isSimplePolygon(rectanglePolygon(4000, 3000))).toBe(true);
+    expect(
+      isSimplePolygon([
+        { x: 0, y: 0 },
+        { x: 4000, y: 0 },
+        { x: 0, y: 3000 },
+        { x: 4000, y: 3000 },
+      ]),
+    ).toBe(false);
   });
 });

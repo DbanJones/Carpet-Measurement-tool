@@ -220,8 +220,10 @@ describe('MaterialsPanel', () => {
     expect(state().project.prices.vatRate).toBe(0.05);
     typeAndBlur(screen.getByLabelText('Carpet fitting rate'), '6.5');
     expect(state().project.prices.labour.carpetFittingPerM2).toBe(6.5);
-    typeAndBlur(screen.getByLabelText('Gripper price'), '1.5');
-    expect(state().project.prices.materials.gripperPerLength).toBe(1.5);
+    typeAndBlur(screen.getByLabelText('Gripper, pack price'), '13');
+    expect(state().project.prices.materials.gripperPerPack).toBe(13);
+    typeAndBlur(screen.getByLabelText('Minimum job charge rate'), '200');
+    expect(state().project.prices.labour.minimumJobLabour).toBe(200);
     fireEvent.change(screen.getByLabelText('Currency'), { target: { value: 'EUR' } });
     expect(state().project.prices.currency).toBe('EUR');
 
@@ -250,5 +252,36 @@ describe('ProductEditor (stand-alone)', () => {
     render(<ProductEditor productId={firstProduct().id} />);
     expect(screen.getByRole('heading', { level: 2, name: /Carpet \(4 m roll\)/ })).toBeTruthy();
     expect(screen.getByText('Not used by any room or staircase yet.')).toBeTruthy();
+  });
+});
+
+
+describe('captions that used to be traps', () => {
+  it('clicking "Also available in" does not add a roll width to the comparison', () => {
+    // The caption was a <label> wrapping the checkboxes, so a click on it activated the first one:
+    // a 2 m roll appeared in the roll-width comparison table with nothing to explain it.
+    const id = state().addProduct({ name: 'Twist', kind: 'carpet', rollWidth: 4000, alternativeRollWidths: [] });
+    render(<ProductEditor productId={id} />);
+    const caption = screen.getByText('Also available in');
+    expect(caption.closest('label')).toBeNull();
+    fireEvent.click(caption);
+    expect((state().project.products.find((p) => p.id === id) as BroadloomProduct).alternativeRollWidths ?? []).toEqual([]);
+    // the checkboxes themselves still work
+    fireEvent.click(screen.getByRole('group', { name: 'Also available in' }).querySelector('input[type=checkbox]')!);
+    expect((state().project.products.find((p) => p.id === id) as BroadloomProduct).alternativeRollWidths!.length).toBe(1);
+  });
+
+  it('clicking "Presets" does not overwrite the underlay settings', () => {
+    // `button` is a labelable element: the old <label> forwarded its activation to the first preset,
+    // replacing roll width, roll length, thickness, tog and price in one click, with no undo.
+    render(<MaterialsPanel />);
+    const before = { ...state().project.options.underlay };
+    const caption = screen.getByText('Presets');
+    expect(caption.closest('label')).toBeNull();
+    fireEvent.click(caption);
+    expect(state().project.options.underlay).toEqual(before);
+    // and the presets themselves still apply
+    fireEvent.click(screen.getByRole('button', { name: UNDERLAY_PRESETS[0]!.label }));
+    expect(state().project.options.underlay).toMatchObject(UNDERLAY_PRESETS[0]!.values);
   });
 });
