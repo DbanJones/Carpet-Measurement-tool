@@ -47,7 +47,7 @@ describe('planUnderlay', () => {
     // along the 4.2 m: 3500 / 1370 = 2.55 -> 3 strips x 4200 = 12 600
     // along the 3.5 m: 4200 / 1370 = 3.07 -> 4 strips x 3500 = 14 000  -> keep 12 600
     // rolls: 12 600 / 11 000 = 1.1454.. -> 2 (exact 1.15)
-    // tape: 2 joins x 4200 = 8 400 -> 8 400 / 20 000 -> 1 roll
+    // tape: 2 joins x 4200 = 8 400 -> 8 400 / 50 000 -> 1 roll
     const plan = planUnderlay({ areas: [{ ownerId: 'bed', ownerName: 'Bedroom', polygon: bedroom }], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
     expect(plan.totalAreaM2).toBeCloseTo(14.7, 6);
     expect(plan.stripLengthMm).toBe(12600);
@@ -85,7 +85,7 @@ describe('planUnderlay', () => {
     // -> pieces 1370 + 130 wide x 4000 and 1370 + 1370 + 760 wide x 6000: 5 strips, 26 000 mm cut
     // packed: three 6000 shelves (the 130 x 4000 goes beside the 760) + one 4000 shelf = 22 000
     // the other direction also packs to 22 000; ties keep along-length. 22 000 / 11 000 = 2.00 rolls
-    // tape: seams 4000 + 4000 + 6000 + 6000 = 20 000 -> 1 roll of 20 m
+    // tape: seams 4000 + 4000 + 6000 + 6000 = 20 000 -> 20 000 / 50 000 -> 1 roll of 50 m
     const plan = planUnderlay({ areas: [{ ownerId: 'L', ownerName: 'L room', polygon: lShape }], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
     expect(plan.totalAreaM2).toBeCloseTo(27, 6);
     expect(plan.perOwner[0]!.strips).toBe(5);
@@ -150,6 +150,22 @@ describe('planUnderlay', () => {
     const plan = planUnderlay({ areas: [{ ownerId: 'bed', ownerName: 'Bedroom', polygon: bedroom }], options: { ...DEFAULT_UNDERLAY, fit: false }, accessories: DEFAULT_ACCESSORIES });
     expect(plan).toMatchObject({ totalAreaM2: 0, stripLengthMm: 0, rolls: 0, exactRolls: 0, tapeLength: 0, tapeRolls: 0, perOwner: [] });
     expect(plan.warnings.map((w) => w.code)).toEqual(['UNDERLAY_NOT_FITTED']);
+  });
+
+  it('a zero roll width is an error, not a hang; a zero roll length still plans strips but cannot count rolls', () => {
+    // the strip planner cannot run without a roll width -> empty plan + UNDERLAY_ROLL_WIDTH
+    const noWidth = planUnderlay({ areas: [{ ownerId: 'bed', ownerName: 'Bedroom', polygon: bedroom }], options: { ...DEFAULT_UNDERLAY, rollWidth: 0 }, accessories: DEFAULT_ACCESSORIES });
+    expect(noWidth).toMatchObject({ totalAreaM2: 0, stripLengthMm: 0, rolls: 0, exactRolls: 0, tapeLength: 0, tapeRolls: 0, perOwner: [] });
+    expect(noWidth.warnings.map((w) => [w.code, w.level])).toEqual([['UNDERLAY_ROLL_WIDTH', 'error']]);
+    const negWidth = planUnderlay({ areas: [{ ownerId: 'st', ownerName: 'Stairs', areaM2: 4.5 }], options: { ...DEFAULT_UNDERLAY, rollWidth: -1370 }, accessories: DEFAULT_ACCESSORIES });
+    expect(negWidth.warnings.map((w) => w.code)).toEqual(['UNDERLAY_ROLL_WIDTH']);
+    // the same 12 600 mm of strips as the bedroom case, but 12 600 / 0 rolls is meaningless -> 0 + error
+    const noLength = planUnderlay({ areas: [{ ownerId: 'bed', ownerName: 'Bedroom', polygon: bedroom }], options: { ...DEFAULT_UNDERLAY, rollLength: 0 }, accessories: DEFAULT_ACCESSORIES });
+    expect(noLength.stripLengthMm).toBe(12600);
+    expect(noLength.tapeLength).toBe(8400);
+    expect(noLength.rolls).toBe(0);
+    expect(noLength.exactRolls).toBe(0);
+    expect(noLength.warnings.map((w) => [w.code, w.level])).toEqual([['UNDERLAY_ROLL_LENGTH', 'error']]);
   });
 
   it('no areas at all -> zeros and no warnings', () => {

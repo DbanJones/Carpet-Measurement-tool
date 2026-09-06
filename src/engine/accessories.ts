@@ -143,14 +143,18 @@ export interface UnderlayInput {
  * the direction that takes less off the roll is kept; every owner's strips are then packed onto one
  * roll so a narrow strip for the hall can come out of the offcut beside a bedroom's part-width strip.
  * Stairs (given as an area) take area / roll width plus `UNDERLAY_PAD_WASTAGE` for the pad offcuts.
+ * Joining tape is the sum of the planner's seam lengths: for a rectangle that is (strips - 1) x strip
+ * length; for an L-shape only the overlap where two neighbouring strips actually touch.
  *
- * Worked example — 4.2 m x 3.5 m bedroom, 1370 mm x 11 m rolls:
+ * Worked example — 4.2 m x 3.5 m bedroom, 1370 mm x 11 m rolls, 50 m tape rolls:
  *   strips along the 4.2 m: 3500 / 1370 = 2.55 -> 3 strips x 4.2 m = 12.6 m
  *   strips along the 3.5 m: 4200 / 1370 = 3.07 -> 4 strips x 3.5 m = 14.0 m
- *   keep 12.6 m -> 12.6 / 11 = 1.15 rolls -> 2 rolls; tape = 2 joins x 4.2 m = 8.4 m -> 1 roll of 20 m.
+ *   keep 12.6 m -> 12.6 / 11 = 1.15 rolls -> 2 rolls; tape = 2 joins x 4.2 m = 8.4 m -> 1 roll of 50 m.
  *
- * Warnings: `UNDERLAY_NOT_FITTED` (info, options.fit false), `UNDERLAY_NO_AREA` (an area with neither
- * outline nor area), `UFH_TOG` (underfloor heating under an underlay above `MAX_UNDERLAY_TOG_WITH_UFH`),
+ * Warnings: `UNDERLAY_NOT_FITTED` (info, options.fit false), `UNDERLAY_ROLL_WIDTH` / `UNDERLAY_ROLL_LENGTH`
+ * (error, a non-positive roll size in the options — the width one returns an empty plan because the
+ * strip planner cannot run without a roll width), `UNDERLAY_NO_AREA` (an area with neither outline nor
+ * area), `UFH_TOG` (underfloor heating under an underlay above `MAX_UNDERLAY_TOG_WITH_UFH`),
  * `UNDERLAY_THICK_ON_STAIRS` (thicker than `MAX_UNDERLAY_THICKNESS_ON_STAIRS` under a stair area),
  * plus any `EMPTY_ROOM` / `UNPLANNABLE` errors from the planner.
  */
@@ -159,17 +163,18 @@ export function planUnderlay(input: UnderlayInput): UnderlayPlan {
   const warnings: Warning[] = [];
   const perOwner: UnderlayOwnerPlan[] = [];
 
+  const emptyPlan = (why: Warning): UnderlayPlan => ({ totalAreaM2: 0, stripLengthMm: 0, rolls: 0, exactRolls: 0, tapeLength: 0, tapeRolls: 0, perOwner, warnings: [why] });
+
   if (!options.fit) {
-    return {
-      totalAreaM2: 0,
-      stripLengthMm: 0,
-      rolls: 0,
-      exactRolls: 0,
-      tapeLength: 0,
-      tapeRolls: 0,
-      perOwner,
-      warnings: [{ level: 'info', code: 'UNDERLAY_NOT_FITTED', message: 'No underlay: the carpet is felt-backed or stuck down.' }],
-    };
+    return emptyPlan({ level: 'info', code: 'UNDERLAY_NOT_FITTED', message: 'No underlay: the carpet is felt-backed or stuck down.' });
+  }
+  // `!(x > 0)` also rejects NaN / undefined. The strip planner's seam search loops forever on a zero
+  // roll width, and a bare-area length would divide by zero, so this is a hard stop.
+  if (!(options.rollWidth > 0)) {
+    return emptyPlan({ level: 'error', code: 'UNDERLAY_ROLL_WIDTH', message: `Underlay roll width must be greater than zero (got ${options.rollWidth} mm) — check the underlay options.` });
+  }
+  if (!(options.rollLength > 0)) {
+    warnings.push({ level: 'error', code: 'UNDERLAY_ROLL_LENGTH', message: `Underlay roll length must be greater than zero (got ${options.rollLength} mm) — strips are planned but rolls cannot be counted.` });
   }
 
   const rollWidth = options.rollWidth;

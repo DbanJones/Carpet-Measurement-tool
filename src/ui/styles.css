@@ -109,3 +109,56 @@ table.data tr.total td { font-weight: 600; border-top: 2px solid var(--text); }
   .results-column { width: 100%; }
   a[href]::after { content: ''; }
 }
+
+/* ---- rooms module (src/ui/rooms): room editor, shape forms, plan preview ---- */
+.room-editor .room-title { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.room-editor .room-title h2 { margin: 0; }
+.room-editor textarea { width: 100%; resize: vertical; }
+.shape-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, 300px); gap: 1rem; align-items: start; }
+@media (max-width: 1000px) { .shape-layout { grid-template-columns: 1fr; } }
+.shape-preview { position: sticky; top: .5rem; }
+.mode-toggle { display: flex; gap: .4rem; flex-wrap: wrap; margin: .4rem 0 .6rem; }
+.mode-toggle button[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.presets { display: flex; gap: .4rem; flex-wrap: wrap; margin: .5rem 0; }
+.figures { display: flex; gap: .5rem 1.25rem; flex-wrap: wrap; margin-top: .6rem; padding: .5rem .6rem; border: 1px solid var(--border); border-radius: 6px; font-size: .88rem; color: var(--muted); }
+.figures b { color: var(--text); font-weight: 600; }
+.field-hint.invalid { color: var(--danger); }
+.table-scroll { overflow-x: auto; }
+table.data td .length-input input { width: 5.25rem; }
+table.data td input.cell-text { width: 7rem; }
+table.data td .stack { gap: .25rem; }
+table.data td .checkbox { margin: 0; }
+.diagram.room-preview { max-height: 60vh; }
+.diagram .edge-badge circle { fill: #fff; stroke: var(--accent); stroke-width: 1.5; }
+.diagram .edge-badge text { fill: var(--accent); font-weight: 600; }
+.diagram .dim { fill: #444; }
+.diagram .door-label { fill: var(--accent); }
+.diagram .seam.cross { stroke-dasharray: 2 5; }
+.diagram .pile-arrow line { stroke: #7a5c3a; stroke-width: 2; }
+.diagram .pile-arrow polygon { fill: #7a5c3a; }
+.diagram .piece-label { fill: #3b2a16; }
+
+/* ---- stairs module (src/ui/stairs): stairs editor, step/landing tables, elevation + plan preview ---- */
+.stairs-editor .stairs-title { margin: 0; }
+.stairs-editor textarea { width: 100%; resize: vertical; }
+.stairs-editor .field-inline { margin-bottom: 0; }
+.stairs-table-wrap { overflow-x: auto; }
+.stairs-table .length-input input { width: 5rem; }
+.stairs-table td { white-space: nowrap; }
+.stairs-table .stairs-step-actions { display: flex; gap: .25rem; }
+.stairs-th-note { text-transform: none; letter-spacing: 0; font-weight: normal; }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.ok { background: #e6f4ea; color: var(--ok); }
+.stairs-pitch-warn { color: var(--warn); font-weight: 600; }
+.stairs-summary { margin: 0; font-weight: 600; }
+.stairs-preview { display: flex; gap: .75rem; align-items: flex-start; flex-wrap: wrap; }
+.stairs-figure { margin: 0; display: flex; flex-direction: column; gap: .25rem; }
+.stairs-figure-elevation { flex: 3 1 280px; min-width: 0; }
+.stairs-figure-plan { flex: 1 1 110px; max-width: 170px; }
+.diagram .stairs-floor { stroke: #333; stroke-width: 1; }
+.diagram .stairs-mass { fill: #f1ebe3; stroke: #333; stroke-width: 1.5; stroke-linejoin: round; }
+.diagram .stairs-winder { stroke: #4c7a46; stroke-width: 1; }
+.diagram .stairs-tread { fill: #b9d7b5; stroke: #4c7a46; stroke-width: 1; }
+.diagram .stairs-landing { fill: #dfe7f5; stroke: #5b7fb5; stroke-width: 1; }
+.diagram .stairs-dim { stroke: var(--muted); stroke-width: 1; }
+.diagram .stairs-dim-text { fill: var(--muted); font-size: 10px; }
