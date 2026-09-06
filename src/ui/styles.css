@@ -162,3 +162,21 @@ table.data td .checkbox { margin: 0; }
 .diagram .stairs-landing { fill: #dfe7f5; stroke: #5b7fb5; stroke-width: 1; }
 .diagram .stairs-dim { stroke: var(--muted); stroke-width: 1; }
 .diagram .stairs-dim-text { fill: var(--muted); font-size: 10px; }
+
+/* ---- materials module (src/ui/materials): products list, product editor, options, price book ---- */
+.materials-panel .intro { margin-top: 0; }
+.materials-panel h4 { margin: .75rem 0 .35rem; font-size: .9rem; color: var(--muted); }
+.preset-add { display: inline-flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+.preset-add select { max-width: 16rem; }
+.product-list li { align-items: flex-start; }
+.product-list .product-main { flex: 1; min-width: 0; }
+.product-editor-inline { border-top: 1px solid var(--border); margin-top: .75rem; padding-top: .75rem; }
+.product-title { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.product-title h2, .product-title h3 { margin: 0; }
+.product-title .badge { margin-left: .4rem; vertical-align: middle; }
+.width-checks { display: flex; flex-wrap: wrap; gap: 0 .9rem; }
+.width-checks .checkbox { margin: .1rem 0; }
+.money-input { display: inline-flex; align-items: center; gap: .3rem; }
+.prices-table td .number-input input { width: 5.5rem; }
+.prices-table td.note { color: var(--muted); font-size: .8rem; }
+.prices-editor > .row { margin-bottom: .75rem; }
