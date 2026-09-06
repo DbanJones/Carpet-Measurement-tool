@@ -56,7 +56,7 @@ function Welcome() {
   const setTab = useProjectStore((s) => s.setTab);
   return (
     <div className="panel">
-      <h2>Flooring estimator</h2>
+      <h2>Start measuring</h2>
       <p className="muted">
         Add rooms by typing their dimensions, trace them from an uploaded floor plan, or add a staircase. The estimate on the right
         updates as you go: carpet or vinyl off the roll with a cutting plan and seams, underlay, gripper, door bars, floor preparation,
