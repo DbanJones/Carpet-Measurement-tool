@@ -1,0 +1,66 @@
+# Flooring Estimator
+
+A browser-based measurement and estimating tool for the flooring trade (UK conventions, metric with
+imperial display). Type room dimensions or trace rooms from an uploaded floor plan, add stairs, and
+get a priced bill of materials with a roll cutting plan.
+
+What it works out:
+
+- **Carpet and sheet vinyl off the roll** – seam placement and a cut list per roll width (4 m / 5 m
+  carpet, 2 / 3 / 4 m vinyl), pile direction, pattern repeats, cross-joined fills, offcut reuse across
+  rooms and stairs, linear metres to order, waste percentage, usable offcuts.
+- **Odd-shaped rooms** – L-shapes, bays, alcoves, chimney breasts, diagonal walls, or any polygon
+  ("walk the walls" or traced from a plan).
+- **Stairs** – straight flights, winders, bullnose/curtail steps, landings, open strings (wrap and
+  binding), runners with stair rods, cap-and-band vs waterfall fitting, stair nosings for hard floors.
+- **Underlay, gripper, door bars** – rolls of 11 m x 1.37 m, 1.52 m gripper lengths with timber or
+  concrete pins, door bar type chosen from the transition (carpet–carpet, carpet–hard floor, T-bar, ramp…).
+- **Floor preparation** – uplift and disposal, smoothing compound bags, primer, plywood/hardboard
+  overlay and fixings, moisture testing and DPMs, door easing, driven by subfloor type and condition.
+- **Laminate, engineered wood, LVT (click and glue-down), carpet tiles** – packs with pattern-based
+  wastage, underlay and DPM, beading/scotia, thresholds, adhesive, tackifier.
+- **Pricing** – editable price book (materials and labour), VAT, per-line and total costs, CSV export,
+  print-ready estimate.
+
+Everything runs client-side: no server, no account, projects are saved in the browser and as JSON files.
+
+## Quick start
+
+```bash
+npm install
+npm run dev        # http://localhost:5173
+npm test           # engine + UI unit tests
+npm run typecheck
+npm run build      # static site in dist/ (relocatable, base "./")
+```
+
+Load the **example house** from the top bar to see every feature exercised.
+
+## Project layout
+
+```
+src/engine/      pure TypeScript estimating engine (no DOM, fully unit tested)
+  types.ts       domain model – rooms, stairs, products, options, results
+  defaults.ts    UK trade constants and indicative prices (all user-editable)
+  geometry.ts    polygons, slab decomposition, doorways
+  broadloom.ts   seam placement for one room (dynamic programme over candidate seams)
+  packer.ts      shelf packing of pieces onto a fixed-width roll
+  rollplan.ts    per-product roll plan: rooms + stairs, cross joins, rolls, offcuts, waste
+  stairs.ts      stair pieces, binding, gripper, underlay, nosings
+  accessories.ts underlay, gripper, door bars, tapes
+  floorprep.ts   subfloor rule table -> preparation items and quantities
+  hardfloor.ts   pack-sold floors, beading, thresholds, adhesive
+  estimate.ts    project -> Estimate (roll plans, BOM, prices, summaries, warnings)
+src/store/       zustand project store with localStorage autosave
+src/ui/          React UI: rooms, stairs, floor plan tracing, materials/options, results
+docs/            design notes and the domain reference behind the defaults
+```
+
+See `docs/DESIGN.md` for the architecture and the cutting algorithm, and `docs/DOMAIN.md` for the
+trade rules and sources behind every default.
+
+## Hosting
+
+`npm run build` produces a static site. The included GitHub Actions workflow builds and tests on
+every push and can publish to GitHub Pages from `main` (enable Pages → Source: GitHub Actions).
+Any static host (Netlify, Cloudflare Pages, S3) works the same way.
