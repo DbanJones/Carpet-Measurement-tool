@@ -60,11 +60,18 @@ import {
  */
 export const STAIR_HARD_FLOOR_WASTAGE = 0.15;
 
-/** Projection assumed for a bullnose step whose projection was not measured (typical UK: ~100 mm beyond the string). */
-export const DEFAULT_BULLNOSE_PROJECTION: Mm = 100;
+/**
+ * Projection assumed for a bullnose step whose projection was not measured. UK bullnose treads run
+ * about 1000-1100 mm overall on an 860 mm flight, i.e. roughly 150 mm beyond the string each side
+ * (range 100-250). The estimate warns whenever this assumption is used — measure it.
+ */
+export const DEFAULT_BULLNOSE_PROJECTION: Mm = 150;
 
-/** Projection assumed for a curtail step whose projection was not measured (a curtail sweeps further, ~200 mm). */
-export const DEFAULT_CURTAIL_PROJECTION: Mm = 200;
+/**
+ * Projection assumed for an unmeasured curtail step. A single curtail is typically 1200 mm overall
+ * on an 860 mm flight, so it sweeps about 340 mm past the string (range 300-400).
+ */
+export const DEFAULT_CURTAIL_PROJECTION: Mm = 340;
 
 /** Tolerance when rounding gripper up to a whole millimetre, so 22360 x 1.1 = 24596.000000000004 does not become 24597. */
 export const GRIPPER_ROUNDING_EPSILON = 1e-6;

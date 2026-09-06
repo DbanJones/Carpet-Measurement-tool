@@ -97,6 +97,7 @@ with a 223 mm going at 860 mm wide (800 mm practical minimum in England, 900 mm 
 | `STEP_WIDTH_ALLOWANCE` | 100 mm | 50 mm each side to tuck against closed strings. **[V]** |
 | `OPEN_SIDE_WRAP` | 150 mm per open side | Tread thickness plus the return under the step plus fixing and trim, where the carpet wraps an exposed cut string and is bound. Derived from US guidance (50–75 mm per vertical edge) plus tread thickness; no UK numeric source found. **[U]** |
 | `BULLNOSE_WRAP_FACTOR` / `BULLNOSE_WRAP_TUCK` | 1.6 × projection + 50 mm | The band follows the curve of the round end: π/2 ≈ 1.571 of the radius for a quarter-round, taken to 1.6 with a tuck each end. **[L]** |
+| `DEFAULT_BULLNOSE_PROJECTION` / `DEFAULT_CURTAIL_PROJECTION` | 150 mm / 340 mm | Assumed only when the projection was not measured, and always flagged on the estimate. A UK bullnose tread runs 1000–1100 mm overall on an 860 mm flight (≈150 mm past the string, range 100–250); a single curtail is about 1200 mm overall (≈340 mm, range 300–400). **[L]** |
 | `RUNNER_END_ALLOWANCE` | 300 mm | Once per continuous (waterfall) run, for the tuck at the top and the finish at the bottom. **[L]** |
 | `RUNNER_DEFAULT_WIDTH` | 600 mm | UK runners are sold 600/700/850/900 mm wide; a 5–15 cm reveal each side of an 860 mm stair suits 600–700 mm. **[V]** |
 | `GRIPPER_PER_STEP` | 2 | One length across the back of the tread, one at the foot of the riser. The TOP step is the exception: its tread is the landing, so only its riser foot is gripped (one length), and a winder's long back edge takes one more. **[V]** |
@@ -208,7 +209,9 @@ uplift £2–6/m² by covering and disposal £2–4/m²; smoothing compound £5�
 6 mm ply supplied and fixed £10–18/m²; whipping £4.50–8/m and taped binding from £8/m; door easing
 £10–25 a door; gripper £0.60 a length in a trade box of 100 against about £1.20 retail; door bars
 £4–13 material or £12–18 supplied and fitted; stair rods £9–32 each; laminate stair nosings £15–45.
-VAT is applied at 20% and can be turned off for a trade price.
+VAT is applied at 20% and can be turned off for a trade price. A `minimumJobLabour` of £180 covers
+a fitter's minimum charge for a visit, so a single small room does not price at half a day's work —
+it is applied once per job, not per room, since a per-room minimum would inflate a whole house.
 
 **Nothing required is left unpriced.** Every item the estimate says must happen either carries a
 price of its own or names the labour line that prices it. Gripper removal, board preparation,

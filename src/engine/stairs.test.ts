@@ -84,8 +84,8 @@ describe('helpers', () => {
     expect(bullnoseWrapExtra({ kind: 'bullnose', bullnoseProjection: 150, bullnoseSides: 'right' })).toEqual({ extra: 290, sides: 1, projection: 150, assumed: false });
     // curtail always both sides: 2 x (1.6 x 200 + 50) = 740
     expect(bullnoseWrapExtra({ kind: 'curtail', bullnoseProjection: 200 })).toEqual({ extra: 740, sides: 2, projection: 200, assumed: false });
-    // unmeasured bullnose: default 100 mm projection -> 1.6 x 100 + 50 = 210
-    expect(bullnoseWrapExtra({ kind: 'bullnose' })).toEqual({ extra: 210, sides: 1, projection: DEFAULT_BULLNOSE_PROJECTION, assumed: true });
+    // unmeasured bullnose: assumed 150 mm projection -> 1.6 x 150 + 50 = 290
+    expect(bullnoseWrapExtra({ kind: 'bullnose' })).toEqual({ extra: 290, sides: 1, projection: DEFAULT_BULLNOSE_PROJECTION, assumed: true });
     expect(bullnoseWrapExtra({ kind: 'straight' }).extra).toBe(0);
   });
 
@@ -232,9 +232,9 @@ describe('(4) bullnose and curtail steps', () => {
   });
 
   it('an unmeasured projection is assumed and flagged', () => {
-    // default 100 mm: 960 + 1.6 x 100 + 50 = 1 170
+    // assumed 150 mm: 960 + 1.6 x 150 + 50 = 1 250
     const p = plan(bullnoseBottom({ bullnoseProjection: undefined }));
-    expect(p.pieces[0]!.width).toBe(1170);
+    expect(p.pieces[0]!.width).toBe(1250);
     expect(codes(p)).toContain('BULLNOSE_PROJECTION_ASSUMED');
   });
 
