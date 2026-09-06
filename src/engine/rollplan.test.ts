@@ -156,6 +156,28 @@ describe('odd shapes', () => {
   });
 });
 
+describe('fill rules', () => {
+  it('never plans a sliver: a 4.2 m wide room from a 4 m roll moves the seam so both pieces are practical', () => {
+    // 4.2 + 0.1 allowance does not fit a 4 m roll; the naive seam leaves a 0.2 m fill (< 300 mm minimum)
+    const plan = buildRollPlan({ product: carpet4, rooms: [room('lounge', { kind: 'rectangle', length: 5000, width: 4200 }, { pileDirection: 'along_length' })], options: opts });
+    expect(plan.pieces).toHaveLength(2);
+    for (const p of plan.pieces) expect(p.width).toBeGreaterThanOrEqual(300 + 100);
+    expect(plan.warnings.filter((w) => w.level === 'error')).toHaveLength(0);
+  });
+
+  it('caps cross joins per fill', () => {
+    // 6 m x 4.4 m, pile along the 6 m: fill 0.5 m wide x 6.1 m long; unlimited joins would allow 8 strips
+    const plan = buildRollPlan({
+      product: carpet4,
+      rooms: [room('lounge', { kind: 'rectangle', length: 6000, width: 4400 }, { seamPolicy: 'min_waste', pileDirection: 'along_length', maxCrossJoinsPerFill: 1 })],
+      options: { ...opts, seamPolicy: 'min_waste' },
+    });
+    const fills = plan.pieces.filter((p) => p.role === 'fill');
+    expect(fills.length).toBeLessThanOrEqual(2);
+    expect(plan.seamsByRoom.lounge!.filter((s) => s.kind === 'cross').length).toBeLessThanOrEqual(1);
+  });
+});
+
 describe('multi-room packing', () => {
   it('a hall fits beside a bedroom fill on the same cut', () => {
     const plan = buildRollPlan({

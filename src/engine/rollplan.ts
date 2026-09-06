@@ -39,8 +39,10 @@ export function buildRollPlan(input: RollPlanInput): RollPlan {
   let netAreaMm2 = input.extraNetAreaMm2 ?? 0;
   const pieces: CutPiece[] = [];
   const directions: Record<Id, 'along_length' | 'along_width'> = {};
+  const optionsByOwner: Record<Id, BroadloomPlanningOptions> = {};
 
   for (const room of input.rooms) {
+    optionsByOwner[room.roomId] = room.options;
     netAreaMm2 += polygonAreaMm2(room.polygon);
     const plan = chooseDirection(room, input.product, rollWidth);
     directions[room.roomId] = plan.pileDirection;
@@ -52,7 +54,7 @@ export function buildRollPlan(input: RollPlanInput): RollPlan {
 
   // Cross joins: for 'min_waste' / 'balanced', split narrow fills into k side-by-side segments when
   // that shortens the packed roll length.
-  const finalPieces = applyCrossJoins(pieces, rollWidth, input.options, seamsByRoom);
+  const finalPieces = applyCrossJoins(pieces, rollWidth, input.options, seamsByRoom, optionsByOwner);
 
   const packed = packOnRoll({ rollWidth, pieces: finalPieces, usableOffcutMin: input.options.usableOffcutMin });
   for (const r of packed.rejected) {
@@ -131,15 +133,22 @@ export function chooseDirection(room: RollPlanRoom, product: BroadloomProduct, r
  * Try splitting each narrow fill into k equal segments cut side by side (cross joins). Keep a split
  * only if it reduces the packed roll length by more than the policy threshold.
  */
-export function applyCrossJoins(pieces: CutPiece[], rollWidth: Mm, options: BroadloomPlanningOptions, seamsByRoom: Record<Id, Seam[]>): CutPiece[] {
-  if (options.seamPolicy === 'min_seams') return pieces;
+export function applyCrossJoins(
+  pieces: CutPiece[],
+  rollWidth: Mm,
+  baseOptions: BroadloomPlanningOptions,
+  seamsByRoom: Record<Id, Seam[]>,
+  optionsByOwner: Record<Id, BroadloomPlanningOptions> = {},
+): CutPiece[] {
   let current = [...pieces];
   const candidates = current
     .filter((p) => p.role === 'fill' && p.width <= rollWidth / 2)
     .sort((a, b) => b.length - a.length);
   for (const fill of candidates) {
+    const options = optionsByOwner[fill.ownerId] ?? baseOptions;
+    if (options.seamPolicy === 'min_seams') continue;
     const base = packOnRoll({ rollWidth, pieces: current, usableOffcutMin: options.usableOffcutMin }).totalLength;
-    const kMax = Math.floor(rollWidth / fill.width);
+    const kMax = Math.min(Math.floor(rollWidth / fill.width), (options.maxCrossJoinsPerFill ?? 2) + 1);
     let bestK = 1;
     let bestLen = base;
     let bestPieces = current;

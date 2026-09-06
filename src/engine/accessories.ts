@@ -66,6 +66,7 @@ export const UNDERLAY_PLANNING: Omit<BroadloomPlanningOptions, 'pileDirection'> 
   balancedThresholdM2: 0,
   minCrossJoinStripLength: 300,
   usableOffcutMin: 300,
+  minFillWidth: 1, // underlay strips can be any width; offcuts are reused
 };
 
 // ---------------------------------------------------------------------------
@@ -389,7 +390,7 @@ export function planGripper(input: GripperInput): GripperPlan {
   const factor = 1 + options.gripperWastage;
 
   const add = (ownerId: Id, ownerName: string, netLength: Mm, pin: GripperPin) => {
-    const length = Math.ceil(Math.max(0, netLength) * factor);
+    const length = Math.ceil(Math.max(0, netLength) * factor - 1e-6); // guard float drift (22 360 x 1.1)
     const lengths = wholeUnits(length, options.gripperLength);
     byPin[pin] += length;
     perOwner.push({ ownerId, ownerName, length, lengths, pin });

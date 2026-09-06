@@ -62,18 +62,25 @@ export function planRoom(input: RoomPlanInput): RoomPlan {
 
   // usable width of a piece that needs a trimming allowance on both sides
   const usable = Math.max(1, rollWidth - options.widthAllowance);
+  const minFill = options.minFillWidth ?? 300;
 
   // ---- candidate seam positions --------------------------------------------------------------
   const cand = new Set<number>();
   const boundaries = [minX, ...slabs.map((s) => s.x1)];
+  const addCand = (x: number) => {
+    if (x > minX && x < maxX) cand.add(round1(x));
+  };
   for (const b of boundaries) {
     cand.add(b);
+    // a seam exactly the minimum fill away from a boundary (so the sliver rule can be satisfied)
+    addCand(b + minFill);
+    addCand(b - minFill);
     for (const w of [rollWidth, usable]) {
       for (let k = 1; k * w < span + w; k++) {
-        const r = b + k * w;
-        const l = b - k * w;
-        if (r > minX && r < maxX) cand.add(round1(r));
-        if (l > minX && l < maxX) cand.add(round1(l));
+        addCand(b + k * w);
+        addCand(b - k * w);
+        addCand(b + k * w - minFill);
+        addCand(b - k * w + minFill);
       }
     }
   }
@@ -98,6 +105,8 @@ export function planRoom(input: RoomPlanInput): RoomPlan {
       const w = xj - xi;
       if (w > rollWidth + 1e-6) break;
       if (bestCost[i] === INF) continue;
+      // no slivers: a piece narrower than the minimum fill is only allowed if it is the whole room
+      if (w < minFill - 1e-6 && !(i === 0 && j === n - 1)) continue;
       const ext = extentOverRange(slabs, xi, xj);
       if (!ext) continue;
       const pieceWidth = Math.min(w + options.widthAllowance, rollWidth);

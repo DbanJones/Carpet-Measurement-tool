@@ -241,6 +241,12 @@ export interface Staircase {
   runner?: { width: Mm; stairRods: boolean };
   /** Nosing overhang of the tread beyond the riser (adds to the wrap around the nose). */
   nosingOverhang?: Mm;
+  /**
+   * The top riser's tread is the landing. By default the stair carpet covers the top riser (no going).
+   * Set true when the landing carpet runs over the top nosing and down the top riser instead: the
+   * stairs then stop one riser short and the landing piece gains rise + tuck.
+   */
+  topRiserByLanding?: boolean;
   subfloor?: Subfloor;
   notes?: string;
 }
@@ -272,6 +278,10 @@ export interface BroadloomPlanningOptions {
   minCrossJoinStripLength: Mm;
   /** Reserve offcuts at least this size (both dimensions) as "usable". */
   usableOffcutMin: Mm;
+  /** Never plan a fill narrower than this (mm); the seam moves so both pieces are practical. Default 300. */
+  minFillWidth?: Mm;
+  /** Maximum cross seams in one fill run (a fill of k strips has k-1). Default 2. */
+  maxCrossJoinsPerFill?: number;
 }
 
 export type LayPattern = 'straight' | 'diagonal' | 'herringbone' | 'chevron' | 'random_stagger' | 'brick';

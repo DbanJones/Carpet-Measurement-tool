@@ -130,7 +130,7 @@ describe('planUnderlay', () => {
   it('huge 20 x 15 m hall: 11 strips x 20 m = 220 m -> exactly 20 rolls of 11 m, 15 rolls of 15 m', () => {
     // across the 15 m: 15 000 / 1370 = 10.95 -> 11 strips x 20 000 = 220 000
     // across the 20 m: 20 000 / 1370 = 14.6 -> 15 strips x 15 000 = 225 000 -> keep 220 000
-    // tape: 10 joins x 20 000 = 200 000 -> 10 rolls of 20 m
+    // tape: 10 joins x 20 000 = 200 000 -> 4 rolls of 50 m
     const big = shapeToPolygon({ kind: 'rectangle', length: 20000, width: 15000 });
     const plan = planUnderlay({ areas: [{ ownerId: 'h', ownerName: 'Hall', polygon: big }], options: DEFAULT_UNDERLAY, accessories: DEFAULT_ACCESSORIES });
     expect(plan.totalAreaM2).toBe(300);
@@ -139,7 +139,7 @@ describe('planUnderlay', () => {
     expect(plan.rolls).toBe(20);
     expect(plan.exactRolls).toBe(20);
     expect(plan.tapeLength).toBe(200000);
-    expect(plan.tapeRolls).toBe(10);
+    expect(plan.tapeRolls).toBe(4);
     // 220 000 / 15 000 = 14.67 -> 15 rolls
     const long = planUnderlay({ areas: [{ ownerId: 'h', ownerName: 'Hall', polygon: big }], options: { ...DEFAULT_UNDERLAY, rollLength: 15000 }, accessories: DEFAULT_ACCESSORIES });
     expect(long.rolls).toBe(15);
@@ -212,19 +212,19 @@ describe('planUnderlay', () => {
 
 describe('planGripper', () => {
   it('4.2 x 3.5 m carpet bedroom with one 838 door: 15.29 m -> 11 lengths -> 2 packs', () => {
-    // (15 400 - 838) x 1.05 = 15 290.1 -> 15 291 mm; 15 291 / 1520 = 10.06 -> 11 lengths; 11 / 10 -> 2 packs
+    // (15 400 - 838) x 1.10 = 16 018.2 -> 16 019 mm; 16 019 / 1520 = 10.54 -> 11 lengths; 11 / 10 -> 2 packs
     const room: GripperRoom = { ownerId: 'bed', ownerName: 'Bedroom', polygon: bedroom, doorways: [dw(838, 'carpet')], subfloor: timber, covering: 'carpet' };
     const plan = planGripper({ rooms: [room], extra: [], options: DEFAULT_ACCESSORIES });
-    expect(plan.totalLength).toBe(15291);
+    expect(plan.totalLength).toBe(16019);
     expect(plan.lengths).toBe(11);
     expect(plan.packs).toBe(2);
-    expect(plan.byPin).toEqual({ timber: 15291, concrete: 0 });
-    expect(plan.perOwner).toEqual([{ ownerId: 'bed', ownerName: 'Bedroom', length: 15291, lengths: 11, pin: 'timber' }]);
+    expect(plan.byPin).toEqual({ timber: 16019, concrete: 0 });
+    expect(plan.perOwner).toEqual([{ ownerId: 'bed', ownerName: 'Bedroom', length: 16019, lengths: 11, pin: 'timber' }]);
     expect(plan.warnings).toEqual([]);
   });
 
   it('sums rooms, rounds lengths per room, splits by pin type and flags reusable gripper', () => {
-    // lounge 5 x 4 on concrete, doors 838 + 762: (18 000 - 1 600) x 1.05 = 17 220 -> 17 220 / 1520 = 11.33 -> 12
+    // lounge 5 x 4 on concrete, doors 838 + 762: (18 000 - 1 600) x 1.10 = 18 040 -> 18 040 / 1520 = 11.87 -> 12
     // bedroom 11 lengths (above) -> 23 lengths -> 3 packs
     const plan = planGripper({
       rooms: [
@@ -234,11 +234,11 @@ describe('planGripper', () => {
       extra: [],
       options: DEFAULT_ACCESSORIES,
     });
-    expect(plan.totalLength).toBe(15291 + 17220);
+    expect(plan.totalLength).toBe(16019 + 18040);
     expect(plan.lengths).toBe(23);
     expect(plan.packs).toBe(3);
-    expect(plan.byPin).toEqual({ timber: 15291, concrete: 17220 });
-    expect(plan.perOwner[1]).toEqual({ ownerId: 'lng', ownerName: 'Lounge', length: 17220, lengths: 12, pin: 'concrete' });
+    expect(plan.byPin).toEqual({ timber: 16019, concrete: 18040 });
+    expect(plan.perOwner[1]).toEqual({ ownerId: 'lng', ownerName: 'Lounge', length: 18040, lengths: 12, pin: 'concrete' });
     expect(plan.warnings).toEqual([{ level: 'info', code: 'REUSE_GRIPPER', message: expect.stringContaining('Lounge'), subjectId: 'lng' }]);
   });
 
@@ -255,24 +255,24 @@ describe('planGripper', () => {
   });
 
   it('openings with nothing to fix to and continuous openings still come off the perimeter', () => {
-    // 15 400 - 900 - 838 = 13 662 x 1.05 = 14 345.1 -> 14 346; / 1520 = 9.44 -> 10 lengths -> 1 pack
+    // 15 400 - 900 - 838 = 13 662 x 1.10 = 15 028.2 -> 15 029; / 1520 = 9.89 -> 10 lengths -> 1 pack
     const plan = planGripper({
       rooms: [{ ownerId: 'bed', ownerName: 'Bedroom', polygon: bedroom, doorways: [dw(900, 'none'), dw(838, 'carpet', { continuous: true, edgeIndex: 2 })], subfloor: timber, covering: 'carpet' }],
       extra: [],
       options: DEFAULT_ACCESSORIES,
     });
-    expect(plan.totalLength).toBe(14346);
+    expect(plan.totalLength).toBe(15029);
     expect(plan.lengths).toBe(10);
     expect(plan.packs).toBe(1);
   });
 
   it('extra runs (stairs) get the wastage and default to timber pins', () => {
-    // 13 steps x 2 lengths x 860 = 22 360 x 1.05 = 23 478; / 1520 = 15.45 -> 16 lengths -> 2 packs
+    // 13 steps x 2 lengths x 860 = 22 360 x 1.10 = 24 596; / 1520 = 16.18 -> 17 lengths -> 2 packs
     const plan = planGripper({ rooms: [], extra: [{ ownerId: 'st', ownerName: 'Stairs', length: 22360 }], options: DEFAULT_ACCESSORIES });
-    expect(plan.perOwner).toEqual([{ ownerId: 'st', ownerName: 'Stairs', length: 23478, lengths: 16, pin: 'timber' }]);
+    expect(plan.perOwner).toEqual([{ ownerId: 'st', ownerName: 'Stairs', length: 24596, lengths: 17, pin: 'timber' }]);
     expect(plan.packs).toBe(2);
     const onConcrete = planGripper({ rooms: [], extra: [{ ownerId: 'st', ownerName: 'Stairs', length: 22360, subfloorType: 'concrete' }], options: DEFAULT_ACCESSORIES });
-    expect(onConcrete.byPin).toEqual({ timber: 0, concrete: 23478 });
+    expect(onConcrete.byPin).toEqual({ timber: 0, concrete: 24596 });
   });
 
   it('zero wastage and an empty input', () => {
