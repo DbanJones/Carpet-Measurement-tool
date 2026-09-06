@@ -180,3 +180,42 @@ table.data td .checkbox { margin: 0; }
 .prices-table td .number-input input { width: 5.5rem; }
 .prices-table td.note { color: var(--muted); font-size: .8rem; }
 .prices-editor > .row { margin-bottom: .75rem; }
+
+/* ---- floorplan module (src/ui/floorplan): upload, calibration, tracing overlay ---- */
+.floorplan-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; margin: .5rem 0 .5rem; padding: 0; list-style: none; counter-reset: fp-step; }
+.floorplan-steps li { border: 1px solid var(--border); border-radius: 6px; padding: .4rem .6rem .4rem 2.2rem; font-size: .85rem; position: relative; }
+.floorplan-steps li::before { counter-increment: fp-step; content: counter(fp-step); position: absolute; left: .6rem; top: .45rem; width: 1.2rem; height: 1.2rem; border-radius: 50%; background: var(--accent); color: #fff; font-size: .75rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+@media (max-width: 800px) { .floorplan-steps { grid-template-columns: 1fr; } }
+.dropzone { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; border: 2px dashed var(--border); border-radius: var(--radius); padding: .75rem 1rem; margin: .5rem 0; background: var(--bg); }
+.dropzone.active { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone-label { display: flex; flex-direction: column; gap: .3rem; font-weight: 600; }
+.dropzone-label input[type='file'] { font-weight: normal; }
+.pdf-pages { margin: .25rem 0 .5rem; }
+.pdf-pages .field { margin-bottom: 0; }
+.floorplan-panel .mode-panel { margin: .25rem 0 .5rem; }
+.floorplan-panel .mode-panel p { margin: 0; }
+.floorplan-panel .mode-panel .field { margin-bottom: 0; }
+.floorplan-panel .mode-panel .figures { margin-top: 0; }
+.scale-status { margin: .25rem 0 .5rem; padding: .35rem .6rem; border-left: 3px solid var(--ok); background: #e6f4ea; border-radius: 4px; }
+.floorplan-view .zoom-controls { margin-bottom: .35rem; }
+.zoom-readout { min-width: 3.2rem; text-align: center; font-variant-numeric: tabular-nums; }
+.floorplan-stage { position: relative; }
+.floorplan-zoom { position: relative; transform-origin: 0 0; }
+.floorplan-zoom img { user-select: none; -webkit-user-drag: none; }
+.floorplan-overlay { position: absolute; left: 0; top: 0; overflow: visible; }
+.fp-room polygon { fill: rgba(31, 111, 235, .12); stroke: var(--accent); }
+.fp-room.active polygon { fill: rgba(31, 111, 235, .28); }
+.fp-room text.fp-label { fill: var(--accent); }
+.fp-door { stroke: var(--danger); stroke-linecap: butt; }
+.fp-label { fill: #222; font-weight: 600; paint-order: stroke; stroke: #fff; stroke-width: .25em; stroke-linejoin: round; pointer-events: none; }
+.fp-trace polyline, .fp-trace polygon { stroke: var(--danger); stroke-linejoin: round; }
+.fp-trace polygon { fill: rgba(198, 40, 40, .12); }
+.fp-trace line.rubber { stroke: var(--danger); }
+.fp-trace circle { fill: #fff; stroke: var(--danger); }
+.fp-trace circle.first { fill: var(--danger); }
+.fp-scale line { stroke: var(--ok); }
+.fp-scale circle { fill: #fff; stroke: var(--ok); }
+.fp-scale.existing line { stroke: var(--ok); opacity: .6; }
+.fp-measure line { stroke: var(--warn); }
+.fp-measure circle { fill: #fff; stroke: var(--warn); }
+.fp-door-new circle { fill: #fff; stroke: var(--danger); }

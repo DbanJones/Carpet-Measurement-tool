@@ -195,7 +195,7 @@ export function FloorPlanCanvas({ plan, zoom, onZoomChange, crosshair, onTap, on
         <button type="button" onClick={() => zoomTo(zoom / ZOOM_STEP)} disabled={zoom <= ZOOM_MIN} aria-label="Zoom out">
           −
         </button>
-        <span className="zoom-readout small" aria-live="polite">
+        <span className="zoom-readout small" aria-live="polite" data-testid="zoom-readout">
           {pct}%
         </span>
         <button type="button" onClick={() => zoomTo(zoom * ZOOM_STEP)} disabled={zoom >= ZOOM_MAX} aria-label="Zoom in">
@@ -204,8 +204,8 @@ export function FloorPlanCanvas({ plan, zoom, onZoomChange, crosshair, onTap, on
         <button type="button" onClick={fit}>
           Fit
         </button>
-        <button type="button" onClick={() => zoomTo(1)}>
-          100%
+        <button type="button" onClick={() => zoomTo(1)} title="Zoom to 100%">
+          Actual size
         </button>
         <span className="muted small">Drag to pan · Ctrl + scroll to zoom</span>
       </div>
