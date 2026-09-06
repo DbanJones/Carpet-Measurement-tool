@@ -219,3 +219,70 @@ table.data td .checkbox { margin: 0; }
 .fp-measure line { stroke: var(--warn); }
 .fp-measure circle { fill: #fff; stroke: var(--warn); }
 .fp-door-new circle { fill: #fff; stroke: var(--danger); }
+
+/* ---- results module (src/ui/results): estimate panel, cutting plans, BOM, export ---- */
+.results-panel h5 { margin: .75rem 0 .35rem; font-size: .85rem; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+.results-panel ul.plain { list-style: none; margin: 0; padding: 0; }
+.results-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
+.results-head h2 { margin: 0; }
+.results-actions { margin-top: .5rem; }
+.results-head .results-actions { margin-top: 0; }
+.results-empty-actions { justify-content: center; margin-top: .75rem; }
+.results-compact h2 { margin-bottom: .6rem; }
+.results-compact .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.results-compact .kpi .value { font-size: 1.05rem; }
+.results-lines { margin: .25rem 0 .75rem; font-size: .85rem; }
+.results-lines li { padding: .3rem .1rem; border-bottom: 1px solid var(--border); }
+.results-lines li:last-child { border-bottom: none; }
+.results-group-heading { margin: 1rem 0 .5rem; }
+.results-expanded .results-summary h3 { margin-top: 1rem; }
+
+/* one broadloom product: diagram, cuts, offcuts, roll width comparison */
+.roll-plan-section + .roll-plan-section { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.roll-plan-section h4 { margin-bottom: .2rem; }
+.roll-plan-summary { margin: 0 0 .5rem; }
+.roll-cut-figure { margin: 0 0 .75rem; }
+.roll-cut-scroll { overflow-x: auto; }
+.roll-cut-figure figcaption { margin-top: .25rem; }
+.cuts-table td, .cuts-table th { vertical-align: top; }
+.cut-pieces li { padding: .1rem 0; font-size: .85rem; }
+.offcut-list li { padding: .2rem 0; font-size: .85rem; }
+.offcut-list .badge { margin-left: .25rem; }
+.compare-table th[scope='row'] { font-weight: 600; white-space: nowrap; }
+.compare-table th[scope='row'] .badge { margin-left: .35rem; font-weight: normal; }
+.compare-table tr.compare-best { background: #e6f4ea; }
+
+/* room / staircase cards on the full page */
+.results-rooms .result-card, .results-stairs .result-card { margin-top: .75rem; }
+.result-card-header { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
+.result-card-header h3 { margin: 0; }
+.result-card-body { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 1.4fr); gap: 1rem; align-items: start; }
+@media (max-width: 900px) { .result-card-body { grid-template-columns: 1fr; } }
+.figures-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: .4rem .9rem; margin: 0 0 .5rem; }
+.figures-list dt { color: var(--muted); font-size: .78rem; }
+.figures-list dd { margin: 0; font-weight: 600; }
+.pieces-table { margin-bottom: .5rem; }
+.result-lines { margin: .35rem 0; }
+.result-lines summary { cursor: pointer; color: var(--accent); }
+.result-lines-list { margin: .35rem 0 0 1.1rem; padding: 0; }
+.result-notes { margin: .35rem 0 0; }
+
+/* bill of materials */
+.bom-table tr.bom-category th { background: var(--bg); text-transform: none; letter-spacing: 0; font-size: .85rem; color: var(--text); }
+.bom-table tr.bom-subtotal td { color: var(--muted); font-size: .85rem; }
+.bom-table tr.bom-total td { font-weight: 600; }
+.bom-table .bom-exact { font-variant-numeric: tabular-nums; }
+.warnings-grouped .warnings-group + .warnings-group { margin-top: .6rem; }
+.warnings-grouped h4 { margin-bottom: .25rem; }
+.warnings { list-style: none; margin: .25rem 0; padding: 0; }
+.warnings-flat button.link { margin-top: .25rem; }
+
+@media print {
+  /* the Estimate tab renders the full estimate in the main column, which the base print rules hide */
+  .layout > .main-column:has(> .results-expanded) { display: block !important; }
+  .results-expanded .panel { border: none; padding: 0; }
+  .results-expanded .panel + .panel { margin-top: .75rem; }
+  .results-panel .no-print { display: none !important; }
+  .roll-plan-section, .result-card, .warnings-group { break-inside: avoid; }
+  .results-expanded .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

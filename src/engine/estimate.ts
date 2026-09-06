@@ -235,10 +235,26 @@ function safePolygon(room: Room): Polygon {
   }
 }
 
+/**
+ * The project's products with any repeated id dropped (the first one wins, as in `prepare`).
+ * A room can only resolve to one product per id, so quoting a duplicated entry twice would put the
+ * same carpet on the order — and in the totals — twice.
+ */
+function uniqueProducts(project: Project): Product[] {
+  const seen = new Set<Id>();
+  const out: Product[] = [];
+  for (const p of project.products ?? []) {
+    if (seen.has(p.id)) continue;
+    seen.add(p.id);
+    out.push(p);
+  }
+  return out;
+}
+
 function prepare(project: Project): Prepared {
   const warnings: Warning[] = [];
   const products = new Map<Id, Product>();
-  for (const p of project.products ?? []) if (!products.has(p.id)) products.set(p.id, p);
+  for (const p of uniqueProducts(project)) products.set(p.id, p);
   const opts = project.options;
 
   const rooms: RoomCtx[] = (project.rooms ?? []).map((room) => {
@@ -468,7 +484,8 @@ export function estimateProject(project: Project): ProjectEstimate {
 
   // ---- 1. broadloom roll plans (one per product, stairs packed with the rooms) -----------------------
   const rollPlans: RollPlan[] = [];
-  for (const product of project.products ?? []) {
+  const products = uniqueProducts(project);
+  for (const product of products) {
     if (!isBroadloomProduct(product)) continue;
     const input = rollPlanInputFor(prep, product, opts.broadloom);
     if (!input) continue;
@@ -617,7 +634,7 @@ export function estimateProject(project: Project): ProjectEstimate {
   const areaOf = new Map<Id, M2>(plannedRooms.map((r) => [r.room.id, r.areaM2]));
 
   // floor coverings: broadloom by the linear metre
-  for (const product of project.products ?? []) {
+  for (const product of products) {
     const plan = rollPlanByProduct.get(product.id);
     if (!plan || !isBroadloomProduct(product)) continue;
     const owners = [...plan.pieces.map((p) => p.ownerId)];
@@ -641,7 +658,7 @@ export function estimateProject(project: Project): ProjectEstimate {
   }
 
   // floor coverings: pack floors by the pack, merged across rooms (+ stairs)
-  for (const product of project.products ?? []) {
+  for (const product of products) {
     if (isBroadloomProduct(product)) continue;
     const roomPlans = plannedRooms.filter((r) => r.product.id === product.id).map((r) => hardFloorPlans[r.room.id]).filter((p): p is HardFloorPlan => p !== undefined);
     const stairPlansFor = prep.stairs.filter((s) => s.plan && s.product?.id === product.id).map((s) => s.plan!);
