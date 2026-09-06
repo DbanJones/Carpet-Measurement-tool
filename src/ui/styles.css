@@ -48,6 +48,10 @@ input[type='number'] { width: 6.5rem; }
 .tabs button { border-radius: 999px; }
 .tabs button[aria-selected='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .layout { display: grid; grid-template-columns: 300px 1fr 380px; gap: 1rem; padding: 1rem; align-items: start; }
+/* Grid items are min-width:auto by default, so a wide table (doorways, stair steps, the BOM) would
+   stretch the 1fr column and scroll the whole window sideways. 0 keeps the scrolling inside the
+   .table-scroll wrappers where it belongs. */
+.layout > * { min-width: 0; }
 @media (max-width: 1200px) { .layout { grid-template-columns: 260px 1fr; } .layout > .results-column { grid-column: 1 / -1; } }
 @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }

@@ -32,6 +32,7 @@ npm run dev        # http://localhost:5173
 npm test           # engine + UI unit tests
 npm run typecheck
 npm run build      # static site in dist/ (relocatable, base "./")
+node scripts/smoke.mjs   # browser smoke test: drives the built app in Chromium against `npm run preview` (needs playwright installed; see the script header)
 ```
 
 Load the **example house** from the top bar to see every feature exercised.
