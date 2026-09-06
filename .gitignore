@@ -7,3 +7,6 @@ coverage
 .vite
 playwright-report
 test-results
+
+# scratch probe files (agents and manual debugging); never part of the suite in CI
+src/**/__*.test.ts
