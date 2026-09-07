@@ -35,6 +35,9 @@
   makes it unit-testable with hand-derived trade examples and reusable server-side later (e.g. a
   quoting API) without change.
 * The **store** holds exactly one `Project` and UI selection; results are always derived, never stored.
+  Save status is held separately: storage failures leave the working project intact and ask the user
+  to save a file, and repaired browser saves report their changes. A cache shared by estimate consumers
+  holds only the current project revision's estimate and width comparisons.
 * All lengths are **millimetres** inside the engine; areas are square metres at the boundary. The UI
   converts for display (metres or feet/inches) and parses free text such as `13'9"`, `420cm`, `4.2`.
 
@@ -152,13 +155,26 @@ down it or lay a 2440 x 1220 sheet of ply on it.
 
 ## Floor plans
 
-Estate-agent plans are "not to scale", so the tool never trusts the image scale: the user clicks two
-points of a known dimension (a printed wall length or a standard door) to calibrate mm-per-pixel, then
-traces each room with orthogonal snapping and marks doorways on edges. Traced polygons become ordinary
-rooms; nothing in the engine knows about pixels. PDFs are rendered with pdf.js in the browser.
-Automatic room detection (ML or a vision model) is deliberately out of scope for v1: current
-open-source models are unreliable on UK agent plans and would need a server; the calibrated trace
-takes under a minute per floor and is auditable.
+The workspace follows Upload → Set scale → Add rooms → Review. Multi-page PDFs are rendered with
+pdf.js and previewed before importing the chosen page. The user calibrates two points against a
+known dimension; guessed door widths are not offered as measurements. Calibration cannot correct a
+distorted or inconsistent drawing, so the Measure tool allows checks against another known length.
+
+Rooms can be detected from a click inside the walls, drawn as a two-corner rectangle, or traced with
+optional orthogonal snapping. All three methods produce a draft that supports corner dragging and
+requires Add room. Confirmed polygons become ordinary engine rooms in millimetres, retaining the
+source pixel polygon for the plan overlay. Recalibrating the plan does not resize existing rooms.
+Selecting a saved room opens details beside the plan; doorway marking is an optional follow-up with
+a preview constrained to that room's wall. Small drawing drafts survive tab/plan navigation in memory,
+but are not included in project backups or browser reloads.
+
+Detection runs locally in a cancellable Web Worker, with a bounded fallback. It thresholds dark lines,
+bridges supported short wall gaps using the known scale, finds the clicked enclosed region and
+simplifies its contour. Analysis is capped at a 1200-pixel long side. A second pass can remove fine
+door/furniture strokes only when the resulting enclosed area remains close to the first candidate.
+Open boundaries, tiny regions and invalid or overly complex polygons receive a manual-drawing
+fallback. Proposed closing edges are marked for review. This is boundary assistance, without OCR,
+automatic scale, room-name recognition or whole-floor import. See [the review and validation](FLOORPLAN_REDESIGN.md).
 
 ## Floor preparation
 
@@ -209,8 +225,12 @@ it, so pairing an opening can never delete work rather than merge it.
 
 ## Offline shell
 
-`public/sw.js` is a hand-written service worker (no build plugin: the hashed asset names are not known
-when it is written) registered from `src/main.tsx` in production builds only. The rules:
+`public/sw.js` is registered from `src/main.tsx` in production builds only. The build injects the
+complete generated asset list, including the PDF reader and worker, into the service worker. The rules:
+
+* **Installation caches the shell and every generated asset.** This makes the app available offline
+  after its first successful installation, even when PDF import was not opened while online. A failed
+  required asset prevents the new worker from replacing the working installation; icons are optional.
 
 * **The shell — navigations and `index.html` — is network-first**, with the cache as the offline
   fallback. This is what lets a redeployed fix reach a returning user: `index.html` names the hashed
@@ -218,10 +238,11 @@ when it is written) registered from `src/main.tsx` in production builds only. Th
   For a tool that carries prices and trade rules, that is the wrong way to fail.
 * **Everything else same-origin is cache-first**, then network, caching what comes back. Vite names
   those files by content hash, so a cached one can never be the wrong version.
-* **`activate` deletes every cache but the current one.** The cache name carries `CACHE_VERSION`,
-  which the `sw-build-id` plugin in `vite.config.ts` rewrites at build time with a hash of the built
-  `index.html` — so each deployment gets a fresh cache and the previous one is dropped. Nothing has
-  to be bumped by hand at release time.
+* **`activate` deletes only older caches for this app's URL scope.** Other apps and another copy of
+  the estimator on the same origin retain their data. The cache name carries `CACHE_VERSION`, which
+  the `sw-build-id` plugin in `vite.config.ts` derives from the built `index.html` and asset list, so a
+  deployment gets a fresh cache without a manual version bump. Cache writes extend the worker's
+  lifetime, and a server error uses the last working shell when one is available.
 
 `src/offline/sw.test.ts` loads the real file into a fake worker global and drives its `fetch` handler
 against stub caches and a stub network, so the redeploy and offline paths are covered by the suite.

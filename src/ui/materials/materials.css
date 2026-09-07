@@ -1,0 +1,19 @@
+.list button.product-choice {
+  flex-direction: row;
+  align-items: center;
+  gap: .75rem;
+  padding: .8rem;
+  margin: .15rem 0;
+  border-color: var(--border);
+}
+
+.list button.product-choice[aria-expanded='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.product-choice .product-main { display: grid; gap: .3rem; }
+.product-choice .product-name { font-weight: 600; }
+.product-choice .meta { line-height: 1.5; }
+.product-choice .product-action { color: var(--accent-text); font-size: .85rem; }
+.materials-panel > .intro { max-width: 75ch; line-height: 1.6; }

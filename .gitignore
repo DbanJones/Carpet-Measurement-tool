@@ -11,3 +11,5 @@ test-results
 # scratch: throwaway scripts and probes. Kept OUT of src/ so vitest's include glob
 # ("src/**/*.test.{ts,tsx}") can never pick up a file CI does not see.
 scratch/
+.npm-cache/
+public/ocr/

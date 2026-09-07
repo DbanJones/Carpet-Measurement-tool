@@ -5,6 +5,8 @@
   "type": "module",
   "description": "Professional flooring measurement and estimating tool: carpet, vinyl, laminate and LVT from typed dimensions or an uploaded floor plan.",
   "scripts": {
+    "predev": "node scripts/prepare-ocr.mjs",
+    "prebuild": "node scripts/prepare-ocr.mjs",
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
@@ -15,12 +17,14 @@
   },
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
   "dependencies": {
-    "pdfjs-dist": "^5.7.284",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "pdfjs-dist": "^6.3.289",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "tesseract.js": "^6.0.1",
     "zustand": "^5.0.15"
   },
   "devDependencies": {

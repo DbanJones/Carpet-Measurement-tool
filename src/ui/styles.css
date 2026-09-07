@@ -1,15 +1,15 @@
 :root {
-  --bg: #f4f5f7;
+  --bg: #f3f6f7;
   --panel: #ffffff;
-  --border: #d9dde3;
-  --text: #1f2933;
-  --muted: #5f6b7a;
-  --accent: #1f6feb;
-  --accent-soft: #e3edff;
+  --border: #dce4e7;
+  --text: #182e3a;
+  --muted: #566b77;
+  --accent: #087d78;
+  --accent-soft: #e6f3f0;
   /* Text colours for the tinted backgrounds. --accent on --accent-soft is only 3.93:1 and --warn on
      --warn-soft only 3.89:1, both under the 4.5:1 WCAG AA threshold — and they carry the selected
      tab, the "least material" badge and every warning count. These pass at ~7:1 and ~5.4:1. */
-  --accent-text: #14539f;
+  --accent-text: #075e59;
   --danger: #c62828;
   --warn: #b26a00;
   --warn-text: #8a5200;
@@ -18,7 +18,7 @@
   --ok-soft: #e6f4ea;
   --carpet: #c9a27e;
   --seam: #c62828;
-  --radius: 8px;
+  --radius: 12px;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   color: var(--text);
   background: var(--bg);

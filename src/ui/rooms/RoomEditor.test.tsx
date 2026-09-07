@@ -39,6 +39,9 @@ describe('RoomEditor', () => {
     const edge = screen.getByLabelText('Wall or edge') as HTMLSelectElement;
     expect(edge.value).toBe('0');
     expect(Array.from(edge.options).map((o) => o.textContent)).toEqual(['Top wall (4.00 m)', 'Right wall (3.00 m)', 'Bottom wall (4.00 m)', 'Left wall (3.00 m)']);
+    expect(screen.queryByLabelText('Subfloor type')).toBeNull();
+    expect(screen.getByText(/Timber floorboards · flat and sound/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Subfloor' }));
     expect((screen.getByLabelText('Subfloor type') as HTMLSelectElement).value).toBe('floorboards');
     expect(screen.getByTestId('room-preview')).toBeTruthy();
   });
@@ -50,6 +53,35 @@ describe('RoomEditor', () => {
     expect(getRoom(id).shape).toEqual({ kind: 'rectangle', length: 5000, width: 3000 });
     expect(screen.getByTestId('figure-area').textContent).toBe('15.00 m²');
     expect(screen.getByTestId('figure-perimeter').textContent).toBe('16.00 m');
+  });
+
+  it('keeps a trace link on unchanged measurements, then detaches it after a manual dimension edit', () => {
+    const floorPlanId = useProjectStore.getState().addFloorPlan({ name: 'Ground floor', imageDataUrl: 'data:image/png;base64,x', widthPx: 1000, heightPx: 1000, mmPerPx: 10 });
+    const source = { floorPlanId, pixelPolygon: [{ x: 10, y: 10 }, { x: 410, y: 10 }, { x: 410, y: 310 }, { x: 10, y: 310 }] };
+    const id = useProjectStore.getState().addRoom({ name: 'Traced lounge', source });
+    const doors = structuredClone(getRoom(id).doorways);
+    render(<RoomEditor roomId={id}/>);
+    expect(screen.getByText(/Changing the shape or measurements here removes that plan link/)).toBeTruthy();
+    typeLength(screen.getByLabelText('Room length'), '4');
+    expect(getRoom(id).source).toEqual(source);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit outline on plan' }));
+    expect(useProjectStore.getState().tab).toBe('floorplan');
+    expect(useProjectStore.getState().selection).toEqual({ kind: 'room', id });
+    expect(getRoom(id).source).toEqual(source);
+    typeLength(screen.getByLabelText('Room length'), '5');
+    expect(getRoom(id).source).toBeUndefined();
+    expect(getRoom(id).shape).toEqual({ kind: 'rectangle', length: 5000, width: 3000 });
+    expect(getRoom(id).doorways).toEqual(doors);
+  });
+
+  it('detaches a traced room when its shape type changes, keeping converted dimensions and openings', () => {
+    const id = useProjectStore.getState().addRoom({ name: 'Traced lounge', source: { floorPlanId: 'ground-plan', pixelPolygon: [{ x: 0, y: 0 }, { x: 400, y: 0 }, { x: 400, y: 300 }, { x: 0, y: 300 }] } });
+    const doorwayId = getRoom(id).doorways[0]!.id;
+    render(<RoomEditor roomId={id}/>);
+    fireEvent.change(screen.getByLabelText('Shape type'), { target: { value: 'polygon' } });
+    expect(getRoom(id).source).toBeUndefined();
+    expect(getRoom(id).shape).toEqual({ kind: 'polygon', points: [{ x: 0, y: 0 }, { x: 4000, y: 0 }, { x: 4000, y: 3000 }, { x: 0, y: 3000 }] });
+    expect(getRoom(id).doorways[0]!.id).toBe(doorwayId);
   });
 
   it('honours the imperial display unit', () => {
@@ -66,10 +98,20 @@ describe('RoomEditor', () => {
     const id = addLounge();
     render(<RoomEditor roomId={id} />);
     fireEvent.change(screen.getByLabelText('Room name'), { target: { value: 'Front room' } });
+    expect(screen.queryByLabelText('Room notes')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Notes' }));
     fireEvent.change(screen.getByLabelText('Room notes'), { target: { value: 'Move the sofa' } });
     expect(getRoom(id).name).toBe('Front room');
     expect(getRoom(id).notes).toBe('Move the sofa');
     expect(screen.getByRole('heading', { name: 'Front room' })).toBeTruthy();
+  });
+
+  it('keeps existing notes visible when reopening a room', () => {
+    const id = addLounge();
+    useProjectStore.getState().updateRoom(id, { notes: 'Move the sofa' });
+    render(<RoomEditor roomId={id} />);
+    expect(screen.getByRole('button', { name: 'Notes' }).getAttribute('aria-expanded')).toBe('true');
+    expect((screen.getByLabelText('Room notes') as HTMLTextAreaElement).value).toBe('Move the sofa');
   });
 
   it('switching the shape type converts the outline sensibly', () => {
@@ -236,12 +278,34 @@ describe('RoomEditor', () => {
   it('edits the subfloor', () => {
     const id = addLounge();
     render(<RoomEditor roomId={id} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Subfloor' }));
     fireEvent.change(screen.getByLabelText('Subfloor type'), { target: { value: 'concrete' } });
     fireEvent.change(screen.getByLabelText('Subfloor condition'), { target: { value: 'uneven' } });
     fireEvent.click(screen.getByLabelText('Underfloor heating'));
     fireEvent.click(screen.getByLabelText('Damp-proof membrane known to be present'));
     expect(getRoom(id).subfloor).toMatchObject({ type: 'concrete', condition: 'uneven', underfloorHeating: true, dpmKnown: true, existingGripper: true });
     expect(screen.getByText(/smoothing compound suggested/)).toBeTruthy();
+  });
+
+  it('keeps preparation assumptions visible when their controls are collapsed', () => {
+    const id = addLounge();
+    useProjectStore.getState().updateRoom(id, {
+      subfloor: { type: 'concrete', condition: 'uneven', existingCovering: 'carpet', underfloorHeating: true },
+    });
+    render(<RoomEditor roomId={id} />);
+    expect(screen.queryByLabelText('Subfloor type')).toBeNull();
+    expect(screen.getByText(/Concrete · uneven · remove carpet · underfloor heating/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Subfloor' }));
+    expect((screen.getByLabelText('Subfloor type') as HTMLSelectElement).value).toBe('concrete');
+    expect((screen.getByLabelText('Underfloor heating') as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('shows existing planning overrides when reopening a room', () => {
+    const id = addLounge();
+    useProjectStore.getState().updateRoom(id, { planning: { pileDirection: 'along_width' } });
+    render(<RoomEditor roomId={id} />);
+    expect(screen.getByRole('button', { name: 'Planning overrides' }).getAttribute('aria-expanded')).toBe('true');
+    expect((screen.getByLabelText('Pile direction') as HTMLSelectElement).value).toBe('along_width');
   });
 
   it('planning overrides write room.planning and clear back to the project default', () => {

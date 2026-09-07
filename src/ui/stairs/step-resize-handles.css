@@ -1,0 +1,6 @@
+.step-resize-handle { cursor: crosshair; outline: none; touch-action: none; }
+.step-resize-hit { fill: transparent; stroke: none; pointer-events: all; }
+.step-resize-dot { fill: #fff; stroke: #9c671e; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.step-resize-handle:hover .step-resize-dot, .step-resize-handle.resizing .step-resize-dot { fill: #ffe5aa; }
+.step-resize-handle:focus-visible .step-resize-dot { stroke: #315dc7; stroke-width: 3; }
+.step-resize-arrow { fill: none; stroke: #79521b; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }

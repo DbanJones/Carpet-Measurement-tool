@@ -23,28 +23,54 @@ function commit(el: HTMLElement, value: string) {
   fireEvent.blur(el);
 }
 
+function toggleDetails(title: string) {
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${title}`) }));
+}
+
 describe('StairsEditor', () => {
   afterEach(cleanup);
 
-  it('renders the basics, the steps table, the preview and the totals from the store', () => {
+  it('restores the saved table measurement when an edit would collapse a tread', () => {
+    const { id } = setup();
+    const going = stairs(id).steps[0]!.going;
+    toggleDetails('Individual steps and turns');
+    commit(screen.getByLabelText('Step 1 going'), '0');
+    expect(stairs(id).steps[0]!.going).toBe(going);
+    expect((screen.getByLabelText('Step 1 going') as HTMLInputElement).value).toBe(String(going / 1000));
+    expect(screen.getByRole('alert').textContent).toMatch(/saved dimensions have been restored/);
+  });
+
+  it('starts with six core controls, the preview and totals, and reveals the step table on request', () => {
     const { id, container } = setup();
     const s = stairs(id);
     expect(s.steps.length).toBe(13);
     expect((screen.getByLabelText('Staircase name') as HTMLInputElement).value).toBe('Stairs');
     expect((screen.getByLabelText('Number of risers') as HTMLInputElement).value).toBe('13');
-    expect(screen.getAllByLabelText(/^Step \d+ kind$/).length).toBe(13);
+    expect(container.querySelectorAll('input, select, textarea')).toHaveLength(6);
+    expect(screen.queryByLabelText('Step 1 kind')).toBeNull();
+    expect(screen.queryByLabelText('Fitting method')).toBeNull();
+    expect(screen.queryByLabelText('Staircase notes')).toBeNull();
+    const detailsLink = screen.getByRole('link', { name: 'More details' });
+    expect(document.getElementById(detailsLink.getAttribute('href')!.slice(1))?.textContent).toContain('Add detail when you need it');
+    expect(screen.getByRole('button', { name: /^Fitting, runner and preparation/ }).textContent).toContain('A separate piece per step (cap & band)');
     // carpet product is selected and listed first
     const productSelect = screen.getByLabelText('Product') as HTMLSelectElement;
     expect(productSelect.value).toBe(s.productId);
-    // preview: elevation + plan
-    expect(screen.getByRole('img', { name: /Side elevation: 13 risers/ })).toBeTruthy();
-    expect(screen.getByRole('img', { name: /Plan view: 13 treads/ })).toBeTruthy();
+    // Both physical views are available immediately; the unfolded measuring profile is optional.
+    expect(screen.getByRole('group', { name: 'Top-down staircase drawing' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: /Side view of physical staircase: 13 risers, 2\.60 m total rise/ })).toBeTruthy();
+    expect(screen.queryByRole('img', { name: /Side elevation:/ })).toBeNull();
     // totals: 13 x 200 rise, 13 x 223 going, summary sentence
     expect(screen.getByText('2.60 m')).toBeTruthy();
     expect(screen.getByText('2.90 m')).toBeTruthy();
     expect(screen.getByTestId('stairs-summary').textContent).toBe('13 risers, 860 mm wide, cap & band');
     // default flight: 200/223 = 41.9°, inside the 42° limit, so no warnings
     expect(container.querySelectorAll('.badge.warn').length).toBe(0);
+    toggleDetails('Unfolded measurement profile');
+    expect(screen.getByRole('img', { name: /Side elevation: 13 risers/ })).toBeTruthy();
+    expect(screen.getByRole('img', { name: /Plan view: 13 treads/ })).toBeTruthy();
+    toggleDetails('Individual steps and turns');
+    expect(screen.getAllByLabelText(/^Step \d+ kind$/).length).toBe(13);
   });
 
   it('changing the number of risers adds steps at the end (copying the last step) or removes from the top', () => {
@@ -75,12 +101,14 @@ describe('StairsEditor', () => {
     expect(stairs(id).steps.every((s) => s.rise === 190)).toBe(true);
     commit(screen.getByLabelText('Width for all steps'), '900mm');
     expect(stairs(id).steps.every((s) => s.width === 900)).toBe(true);
+    toggleDetails('Fitting, runner and preparation');
     commit(screen.getByLabelText('Nosing overhang'), '25mm');
     expect(stairs(id).nosingOverhang).toBe(25);
   });
 
   it('edits a single step, inserts a winder above it and deletes a step, keeping landings attached', () => {
     const { id } = setup({ steps: makeSteps(4), landings: [{ id: 'l1', kind: 'quarter', length: 900, width: 860, afterStepIndex: 2 }] });
+    toggleDetails('Individual steps and turns');
     commit(screen.getByLabelText('Step 2 going'), '0.25');
     expect(stairs(id).steps[1]!.going).toBe(250);
 
@@ -110,6 +138,7 @@ describe('StairsEditor', () => {
 
   it('changing a step kind to bullnose shows the projection/sides inputs', () => {
     const { id } = setup({ steps: makeSteps(3) });
+    toggleDetails('Individual steps and turns');
     fireEvent.change(screen.getByLabelText('Step 1 kind'), { target: { value: 'bullnose' } });
     expect(stairs(id).steps[0]).toMatchObject({ kind: 'bullnose', bullnoseSides: 'right' });
     commit(screen.getByLabelText('Step 1 bullnose projection'), '120mm');
@@ -121,6 +150,8 @@ describe('StairsEditor', () => {
 
   it('flags steps outside Approved Document K limits and a flight steeper than 42°', () => {
     const { id, container } = setup({ steps: makeSteps(3, { kind: 'straight', rise: 250, going: 210, width: 860 }) });
+    expect(screen.getByText(/Check the measurements on 3 steps/)).toBeTruthy();
+    toggleDetails('Individual steps and turns');
     const badges = container.querySelectorAll('.badge.warn');
     // three step badges plus the flight pitch badge in the section header
     expect(badges.length).toBe(4);
@@ -149,6 +180,7 @@ describe('StairsEditor', () => {
 
   it('switches method, open sides, runner and subfloor through the store', () => {
     const { id } = setup();
+    toggleDetails('Fitting, runner and preparation');
     fireEvent.change(screen.getByLabelText('Fitting method'), { target: { value: 'waterfall' } });
     expect(stairs(id).method).toBe('waterfall');
     expect(screen.getByText(/One piece flows down the flight/)).toBeTruthy();
@@ -175,6 +207,7 @@ describe('StairsEditor', () => {
 
   it('adds, edits and removes landings', () => {
     const { id } = setup({ steps: makeSteps(5) });
+    toggleDetails('Landings');
     fireEvent.click(screen.getByText('+ Add landing'));
     expect(stairs(id).landings).toHaveLength(1);
     expect(stairs(id).landings[0]).toMatchObject({ kind: 'top', length: 1000, width: 860, afterStepIndex: 4 });
@@ -190,6 +223,7 @@ describe('StairsEditor', () => {
     commit(screen.getByLabelText('Landing 1 length'), '1.2');
     const l = stairs(id).landings[0]!;
     expect(l).toMatchObject({ kind: 'half', length: 1200, afterStepIndex: 1 });
+    toggleDetails('Unfolded measurement profile');
     expect(screen.getByRole('img', { name: /total run incl\. landings/ })).toBeTruthy();
 
     // a landing holds measured dimensions too, so removing it asks first
@@ -210,6 +244,7 @@ describe('StairsEditor', () => {
     expect(screen.getByText(/needs a stair nosing profile on every step/)).toBeTruthy();
 
     act(() => useProjectStore.getState().updateProject({ displayUnit: 'imperial' }));
+    toggleDetails('Individual steps and turns');
     expect((screen.getByLabelText('Step 1 rise') as HTMLInputElement).value).toBe(`0' 8"`);
     expect(screen.getByTestId('stairs-summary').textContent).toContain(`2' 10" wide`);
   });
@@ -221,6 +256,155 @@ describe('StairsEditor', () => {
     expect(useProjectStore.getState().project.staircases.find((s) => s.id === id)).toBeUndefined();
     expect(screen.getByText(/no longer exists/)).toBeTruthy();
     confirmSpy.mockRestore();
+  });
+
+  it('shows existing complex details in collapsed summaries and preserves them when disclosures change', () => {
+    const variedSteps = makeSteps(3);
+    variedSteps[1] = { ...variedSteps[1]!, kind: 'winder', going: 480, goingNarrow: 95, width: 940 };
+    const { id } = setup({
+      steps: variedSteps,
+      method: 'waterfall',
+      openSides: 'left',
+      runner: { width: 680, stairRods: true },
+      nosingOverhang: 30,
+      subfloor: { type: 'plywood', condition: 'uneven' },
+      notes: 'Match the upstairs carpet',
+      landings: [{ id: 'landing', kind: 'top', length: 1100, width: 900, afterStepIndex: 2 }],
+    });
+    act(() => useProjectStore.getState().updateStaircase(id, { topRiserByLanding: true }));
+    const before = structuredClone(stairs(id));
+    expect(screen.getByRole('button', { name: /^Individual steps and turns/ }).textContent).toContain('1 winder · individual measurements recorded');
+    expect(screen.getByRole('button', { name: /^Landings/ }).textContent).toContain('1 landing included');
+    const fitting = screen.getByRole('button', { name: /^Fitting, runner and preparation/ });
+    expect(fitting.textContent).toContain('680 mm runner with stair rods');
+    expect(fitting.textContent).toContain('left side open');
+    expect(fitting.textContent).toContain('30 mm nosing');
+    expect(fitting.textContent).toContain('top riser covered by landing');
+    expect(fitting.textContent).toContain('Plywood, uneven');
+    expect(fitting.textContent).toContain('quote note recorded');
+    expect(screen.getByLabelText('Going for all steps').getAttribute('placeholder')).toBe('varies');
+    expect((screen.getByLabelText('Going for all steps') as HTMLInputElement).value).toBe('');
+    expect(screen.getByText(/This flight has individual measurements/)).toBeTruthy();
+
+    for (const title of ['Individual steps and turns', 'Landings', 'Fitting, runner and preparation']) {
+      const button = screen.getByRole('button', { name: new RegExp(`^${title}`) });
+      expect(button.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(button);
+      expect(button.getAttribute('aria-expanded')).toBe('true');
+      fireEvent.click(button);
+      expect(button.getAttribute('aria-expanded')).toBe('false');
+    }
+    expect(stairs(id)).toEqual(before);
+    expect(screen.queryByLabelText('Step 2 going (max)')).toBeNull();
+    expect(screen.queryByLabelText('Runner width')).toBeNull();
+    expect(screen.queryByLabelText('Landing 1 length')).toBeNull();
+  });
+
+  it('changes a shared dimension without flattening individual measurements in the other dimensions', () => {
+    const variedSteps = makeSteps(3);
+    variedSteps[1] = { ...variedSteps[1]!, kind: 'winder', going: 480, goingNarrow: 95, width: 940 };
+    const { id } = setup({ steps: variedSteps });
+    commit(screen.getByLabelText('Rise for all steps'), '190mm');
+    expect(stairs(id).steps.map((step) => step.rise)).toEqual([190, 190, 190]);
+    expect(stairs(id).steps[1]).toMatchObject({ kind: 'winder', going: 480, goingNarrow: 95, width: 940 });
+    toggleDetails('Individual steps and turns');
+    commit(screen.getByLabelText('Step 2 going (max)'), '490mm');
+    toggleDetails('Individual steps and turns');
+    toggleDetails('Individual steps and turns');
+    expect((screen.getByLabelText('Step 2 going (max)') as HTMLInputElement).value).toBe('0.49');
+    expect(stairs(id).steps[0]!.going).toBe(223);
+  });
+
+  it('starts each selected staircase with the simple controls without carrying over open details', () => {
+    const { id, rerender } = setup();
+    toggleDetails('Individual steps and turns');
+    expect(screen.getByLabelText('Step 1 going')).toBeTruthy();
+    let secondId = '';
+    act(() => { secondId = useProjectStore.getState().addStaircase({ name: 'Back stairs' }); });
+    rerender(<StairsEditor staircaseId={secondId} />);
+    expect((screen.getByLabelText('Staircase name') as HTMLInputElement).value).toBe('Back stairs');
+    expect(screen.queryByLabelText('Step 1 going')).toBeNull();
+    expect(stairs(id).steps).toHaveLength(13);
+  });
+
+  it('offers corner and curved shapes without applying an unreviewed layout', () => {
+    const { id } = setup();
+    const before = structuredClone(stairs(id));
+    toggleDetails('Measured turns and shape presets');
+    fireEvent.click(screen.getByRole('button', { name: /Quarter turn L-shaped/ }));
+    expect(screen.getByLabelText('Turn direction')).toBeTruthy();
+    expect(stairs(id)).toEqual(before);
+    fireEvent.change(screen.getByLabelText('Turn direction'), { target: { value: 'left' } });
+    commit(screen.getByLabelText('Turn after step'), '4');
+    commit(screen.getByLabelText('Steps in the turn'), '3');
+    commit(screen.getByLabelText('Widest turning tread depth'), '650mm');
+    commit(screen.getByLabelText('Narrowest turning tread depth'), '90mm');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply staircase layout' }));
+    expect(stairs(id).layout).toMatchObject({ kind: 'quarter_turn', direction: 'left', turnStartIndex: 4, turnSteps: 3 });
+    expect(stairs(id).steps.slice(4, 7).every((step) => step.kind === 'winder' && step.going === 650 && step.goingNarrow === 90)).toBe(true);
+    expect(stairs(id).steps.map((s) => s.id)).toEqual(before.steps.map((s) => s.id));
+    toggleDetails('Unfolded measurement profile');
+    expect(screen.getByRole('img', { name: /quarter turn, turning left/ })).toBeTruthy();
+  });
+
+  it('builds a half landing with its measured dimensions and keeps an existing top landing', () => {
+    const { id } = setup({ landings: [{ id: 'top', kind: 'top', afterStepIndex: 12, length: 1500, width: 950 }] });
+    const original = structuredClone(stairs(id));
+    toggleDetails('Measured turns and shape presets');
+    fireEvent.click(screen.getByRole('button', { name: /Half turn U-shaped/ }));
+    fireEvent.change(screen.getByLabelText('At the turn'), { target: { value: 'landing' } });
+    commit(screen.getByLabelText('Turn after step'), '6');
+    commit(screen.getByLabelText('Turning landing depth'), '1100mm');
+    commit(screen.getByLabelText('Turning landing width'), '1800mm');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply staircase layout' }));
+    expect(stairs(id).steps).toEqual(original.steps);
+    expect(stairs(id).landings[0]).toEqual(original.landings[0]);
+    expect(stairs(id).landings[1]).toMatchObject({ kind: 'half', afterStepIndex: 5, length: 1100, width: 1800 });
+    toggleDetails('Unfolded measurement profile');
+    expect(screen.getByRole('img', { name: /half turn, turning right/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit turn and curve' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply staircase layout' }));
+    expect(stairs(id).landings).toHaveLength(2);
+  });
+
+  it('uses all selected turning treads for a curved flight and can retain their individual depths', () => {
+    const customSteps = makeSteps(8).map((step, i) => ({ ...step, kind: 'winder' as const, going: 460 + i * 10, goingNarrow: 100 + i }));
+    const { id } = setup({ steps: customSteps });
+    toggleDetails('Measured turns and shape presets');
+    fireEvent.click(screen.getByRole('button', { name: /Curved A sweeping flight/ }));
+    commit(screen.getByLabelText('Curve sweep'), '120');
+    commit(screen.getByLabelText('Inside radius'), '500mm');
+    expect(screen.queryByLabelText('Widest turning tread depth')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply staircase layout' }));
+    expect(stairs(id).steps).toEqual(customSteps);
+    expect(stairs(id).layout).toMatchObject({ kind: 'curved', turnStartIndex: 0, turnSteps: 8, curveAngle: 120, innerRadius: 500 });
+    toggleDetails('Unfolded measurement profile');
+    expect(screen.getByRole('img', { name: /curved, turning right/ })).toBeTruthy();
+  });
+
+  it('duplicates the staircase from its editor', () => {
+    const { id } = setup({ name: 'Curved hall stairs' });
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate staircase' }));
+    const all = useProjectStore.getState().project.staircases;
+    expect(all).toHaveLength(2);
+    expect(all[0]!.id).toBe(id);
+    expect(all[1]!.name).toBe('Curved hall stairs (copy)');
+    expect(useProjectStore.getState().selection).toEqual({ kind: 'staircase', id: all[1]!.id });
+  });
+
+  it('opens an existing turning landing with its saved dimensions when changing direction', () => {
+    const { id } = setup({
+      layout: { kind: 'half_turn', direction: 'right', turnStartIndex: 6, turnSteps: 0 },
+      landings: [{ id: 'middle', kind: 'half', afterStepIndex: 5, length: 1220, width: 1940 }],
+    });
+    toggleDetails('Measured turns and shape presets');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit turn and curve' }));
+    expect((screen.getByLabelText('Turning landing depth') as HTMLInputElement).value).toBe('1.22');
+    expect((screen.getByLabelText('Turning landing width') as HTMLInputElement).value).toBe('1.94');
+    fireEvent.change(screen.getByLabelText('Turn direction'), { target: { value: 'left' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply staircase layout' }));
+    expect(stairs(id).landings).toEqual([{ id: 'middle', kind: 'half', afterStepIndex: 5, length: 1220, width: 1940 }]);
+    expect(stairs(id).layout?.direction).toBe('left');
   });
 });
 

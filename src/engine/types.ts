@@ -66,6 +66,17 @@ export interface BroadloomProduct {
   thickness?: Mm;
   /** Price per square metre (whole roll width x cut length is charged). */
   pricePerM2?: number;
+  /** Missing means the original square-metre pricing. */
+  priceBasis?: 'per_m2' | 'per_roll';
+  pricePerRoll?: number;
+  /** Length covered by the roll price; required for per-roll pricing. */
+  pricedRollLength?: Mm;
+  /** Whole rolls are bought, or the roll price is prorated to the ordered cut length. */
+  rollPricing?: 'whole_rolls' | 'cut_length';
+  /** Minimum surplus over net area. Cutting waste already in the layout counts towards this. */
+  wastageAllowance?: number;
+  /** Missing fields inherit project underlay settings. Carpet only. */
+  underlay?: Partial<UnderlayOptions>;
 }
 
 /** A pack-sold product (laminate, LVT, wood, carpet tiles). */
@@ -82,6 +93,10 @@ export interface PackProduct {
   thickness?: Mm;
   pricePerPack?: number;
   pricePerM2?: number;
+  /** Missing preserves the original pack-price-first behaviour. */
+  priceBasis?: 'per_pack' | 'per_m2';
+  /** Product defaults; individual rooms may override these. */
+  hardFloor?: Partial<HardFloorOptions>;
 }
 
 export type Product = BroadloomProduct | PackProduct;
@@ -219,6 +234,10 @@ export interface Step {
   /** For bullnose/curtail steps: how far the curved end projects beyond the string on each side. */
   bullnoseProjection?: Mm;
   bullnoseSides?: 'left' | 'right' | 'both';
+  /** Editable plan placement in millimetres. Heading and signed sweep are degrees from +x. */
+  plan?: { x: Mm; y: Mm; heading: number; turn?: number };
+  /** Editable footprint: local across/width and along/going coordinates. Shared boundaries are explicit. */
+  outline?: { points: Point[]; entry: [number, number]; exit: [number, number]; corners?: number[] };
 }
 
 export interface Landing {
@@ -228,6 +247,10 @@ export interface Landing {
   width: Mm;
   /** Position in the sequence: after step index n (0-based). */
   afterStepIndex: number;
+  /** Corners in incoming-flight axes, divided by measured width and length. */
+  outline?: Point[];
+  /** Ordered outgoing edge of a custom landing; its normal is the next flight's heading. */
+  outlineExit?: [number, number];
 }
 
 export type StairMethod =
@@ -235,6 +258,24 @@ export type StairMethod =
   | 'waterfall'
   /** Individual piece per step ("cap and band"), cut from offcuts / a cut across the roll. Least waste. */
   | 'cap_and_band';
+
+/** Walking direction and turn position for the plan view. Cut sizes always use measured steps. */
+export interface StairLayout {
+  kind: 'straight' | 'quarter_turn' | 'half_turn' | 'curved';
+  direction: 'left' | 'right';
+  /** First turning tread (zero based); a turning landing precedes this tread. */
+  turnStartIndex: number;
+  turnSteps: number;
+  /** Total sweep for a curved flight, in degrees. */
+  curveAngle?: number;
+  /** Clear radius inside a curved flight, millimetres; used for the plan schematic. */
+  innerRadius?: Mm;
+}
+
+/** A direction sketch only. Measured treads and landings determine every cut and quantity. */
+export interface StairDrawing {
+  points: Array<{ x: number; y: number; curve?: boolean }>;
+}
 
 export interface Staircase {
   id: Id;
@@ -263,6 +304,10 @@ export interface Staircase {
   underlayRisers?: boolean;
   subfloor?: Subfloor;
   notes?: string;
+  layout?: StairLayout;
+  drawing?: StairDrawing;
+  /** Traced footprint only: riser count and tread measurements are recorded separately. */
+  source?: { floorPlanId: Id; pixelPolygon: { x: number; y: number }[] };
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +325,8 @@ export type SeamPolicy =
   | 'balanced';
 
 export interface BroadloomPlanningOptions {
+  /** Minimum order surplus over net area; actual cutting waste is credited first. */
+  wastageAllowance?: number;
   pileDirection: PileDirection;
   seamPolicy: SeamPolicy;
   /** Extra added to every cut piece's LENGTH (mm) for trimming to the walls. Trade norm: 100 mm. */
@@ -368,7 +415,27 @@ export interface FloorPrepOptions {
 // Project
 // ---------------------------------------------------------------------------
 
+export type LabourActivity = 'uplift' | 'disposal' | 'latex' | 'ply' | 'gripper_removal' | 'moisture_test' | 'secure_boards' | 'sand_boards' | 'skirting_refit' | 'door_easing' | 'binding';
+
+export interface LabourModel {
+  mode: 'unit_rates' | 'hourly';
+  hourlyRate: number;
+  setupHours: number;
+  /** Additional time fraction for access, furniture and site uncertainty. */
+  allowance: number;
+  fittingM2PerHour: Record<CoveringKind, number>;
+  /** Fitting-time multiplier for herringbone, chevron and diagonal layouts. */
+  patternMultiplier: number;
+  straightStepMinutes: number;
+  shapedStepMinutes: number;
+  landingM2PerHour: number;
+  /** Minutes per unit of the matching preparation/binding BOM activity. */
+  activityMinutes: Record<LabourActivity, number>;
+}
+
 export interface PriceBook {
+  /** Optional hourly estimate; absent keeps the existing unit-rate costing. */
+  labourModel?: LabourModel;
   currency: string;
   vatRate: number; // 0.2
   applyVat: boolean;
@@ -434,6 +501,8 @@ export interface PriceBook {
 export interface Project {
   id: Id;
   name: string;
+  /** Business identity and standard wording used in the client pack. */
+  business?: { name?: string; email?: string; phone?: string; address?: string; website?: string; terms?: string };
   /** Display unit for the UI; the engine stays in mm. */
   displayUnit: 'metric' | 'imperial';
   products: Product[];
@@ -467,6 +536,19 @@ export interface Project {
 // Floor plans
 // ---------------------------------------------------------------------------
 
+export interface PlanTextLine {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+  /** Text explicitly corrected/confirmed at this original image position; OCR confidence is retained. */
+  reviewed?: boolean;
+}
+
+export interface PlanReading { text: string; lines: PlanTextLine[]; source: 'ocr' | 'pdf' }
+
 export interface FloorPlanDocument {
   id: Id;
   name: string;
@@ -477,6 +559,10 @@ export interface FloorPlanDocument {
   /** Set once the user calibrates: millimetres represented by one pixel. */
   mmPerPx?: number;
   calibration?: { a: { x: number; y: number }; b: { x: number; y: number }; distance: Mm };
+  /** Read text remains a suggestion; it never establishes scale without a known segment. */
+  reading?: PlanReading;
+  /** A scaled drawing sheet created without an uploaded plan. Grid spacing in millimetres. */
+  sketch?: { gridMm: Mm };
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +662,10 @@ export interface BomLine {
   exactQuantity?: number;
   unitPrice?: number;
   total?: number;
+  /** Recommended work or spare material, excluded from the estimate total. */
+  optional?: boolean;
+  /** Activity quantified here but included elsewhere or requiring no separate charge. */
+  informational?: boolean;
   /** Which rooms/staircases contribute. */
   subjectIds: Id[];
   notes?: string;

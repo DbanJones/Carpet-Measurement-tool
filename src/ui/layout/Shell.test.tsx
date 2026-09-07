@@ -24,6 +24,7 @@ describe('TopBar', () => {
     state().addRoom({ name: 'Lounge' });
     render(<TopBar />);
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(screen.getByRole('button', { name: /Project actions/ }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Load example house' }));
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('example house'));
@@ -39,9 +40,11 @@ describe('TopBar', () => {
   });
 
   it('does not nag when there is nothing to lose', () => {
+    useProjectStore.setState({ project: makeEmptyProject() });
     render(<TopBar />);
     const confirmSpy = vi.spyOn(window, 'confirm');
     expect(hasContent(state().project)).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Project actions/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Load example house' }));
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(state().project.rooms.length).toBeGreaterThan(0);
@@ -57,6 +60,7 @@ describe('TopBar', () => {
     });
     render(<TopBar />);
     expect(state().tab).toBe('rooms');
+    fireEvent.click(screen.getByRole('button', { name: /Project actions/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Print' }));
     expect(state().tab).toBe('results');
     expect(print).not.toHaveBeenCalled();
@@ -68,19 +72,48 @@ describe('TopBar', () => {
     render(<TopBar />);
     const nav = screen.getByRole('navigation', { name: 'Sections' });
     expect(within(nav).queryAllByRole('tab')).toHaveLength(0);
+    expect(within(nav).getAllByRole('button').map((b) => b.textContent)).toEqual(['Materials & options', 'Rooms & stairs', 'Floor plan', 'Estimate', 'Settings']);
     const current = within(nav)
       .getAllByRole('button')
       .filter((b) => b.getAttribute('aria-current') === 'page');
     expect(current.map((b) => b.textContent)).toEqual(['Rooms & stairs']);
+    fireEvent.click(within(nav).getByRole('button', { name: 'Settings' }));
+    expect(state().tab).toBe('settings');
+    expect(within(nav).getByRole('button', { name: 'Settings' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('has the page heading, so the outline does not start at h2', () => {
     render(<TopBar />);
     expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
   });
+
+  it('protects project details and customised prices before any room is added', () => {
+    const project = makeEmptyProject();
+    project.customer = 'Alex';
+    expect(hasContent(project)).toBe(true);
+    const customised = makeEmptyProject();
+    customised.products[0]!.pricePerM2 = 99;
+    expect(hasContent(customised)).toBe(true);
+  });
+
+  it('closes the project actions with Escape', () => {
+    render(<TopBar />);
+    fireEvent.click(screen.getByRole('button', { name: /Project actions/ }));
+    expect(screen.getByRole('button', { name: 'Load file' })).toBeTruthy();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('button', { name: 'Load file' })).toBeNull();
+    expect(document.activeElement?.id).toBe('project-actions-toggle');
+  });
 });
 
 describe('Sidebar', () => {
+  it('opens a newly added room even when starting from another section', () => {
+    state().setTab('results');
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole('button', { name: '+ Room' }));
+    expect(state().tab).toBe('rooms');
+    expect(state().selection.kind).toBe('room');
+  });
   it('opens a room from the keyboard: every row is a real button', () => {
     const id = state().addRoom({ name: 'Lounge' });
     state().select({ kind: 'none' });

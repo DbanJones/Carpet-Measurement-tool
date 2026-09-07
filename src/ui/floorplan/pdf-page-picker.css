@@ -1,0 +1,36 @@
+.fp-pdf-picker {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 1rem;
+  margin: 1rem 0;
+  min-width: 0;
+}
+.fp-pdf-picker-heading { display: flex; justify-content: space-between; align-items: start; gap: 1rem; }
+.fp-pdf-picker-heading > div:first-child { min-width: 0; }
+.fp-pdf-picker h3 { margin-bottom: .3rem; }
+.fp-pdf-picker-name { margin: 0; color: var(--muted); overflow-wrap: anywhere; font-size: .85rem; }
+.fp-pdf-picker-select { display: flex; flex-direction: column; flex-shrink: 0; gap: .3rem; }
+.fp-pdf-picker-select label { color: var(--muted); font-size: .85rem; }
+.fp-pdf-picker-help { font-size: .9rem; color: var(--muted); margin: .8rem 0; }
+.fp-pdf-picker-preview {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 240px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.fp-pdf-picker-preview img { display: block; width: 100%; height: auto; max-height: 65vh; object-fit: contain; }
+.fp-pdf-picker-error { padding: 1rem; text-align: center; }
+.fp-pdf-picker-error p { color: var(--danger); overflow-wrap: anywhere; }
+.fp-pdf-picker-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: .8rem; }
+@media (max-width: 540px) {
+  .fp-pdf-picker { padding: .75rem; }
+  .fp-pdf-picker-heading { flex-direction: column; gap: .7rem; }
+  .fp-pdf-picker-select { width: 100%; }
+  .fp-pdf-picker-actions button { min-height: 44px; }
+  .fp-pdf-picker-actions .primary { flex: 1; }
+}

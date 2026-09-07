@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { isValidElement, useEffect, useId, useState, type ReactNode } from 'react';
 import { parseLength, fromMm, formatFtIn, roundTo, MM_PER_M } from '@engine/units';
 import type { Mm } from '@engine/types';
 
@@ -60,10 +60,11 @@ export function LengthInput({
   className?: string;
 }) {
   const display = (mm: Mm | undefined) =>
-    mm === undefined || Number.isNaN(mm) ? '' : unit === 'metric' ? String(roundTo(fromMm(mm, 'm'), 3)) : formatFtIn(mm);
+    mm === undefined || Number.isNaN(mm) ? '' : unit === 'metric' ? String(roundTo(fromMm(mm, 'm'), 3)) : `${mm < 0 ? '-' : ''}${formatFtIn(Math.abs(mm))}`;
   const [text, setText] = useState(display(value));
   const [error, setError] = useState<string | null>(null);
   const errorId = useId();
+  const unitId = useId();
   useEffect(() => {
     setText(display(value));
     setError(null);
@@ -77,7 +78,10 @@ export function LengthInput({
       setError(null);
       return;
     }
-    const mm = parseLength(text, unit === 'metric' ? 'm' : 'ft');
+    // Survey coordinates may be negative, while measured lengths remain nonnegative.
+    const negative = min < 0 && /^[-−]/.test(text.trim());
+    const parsed = parseLength(negative ? text.trim().slice(1).trim() : text, unit === 'metric' ? 'm' : 'ft');
+    const mm = parsed === null ? null : negative ? -parsed : parsed;
     if (mm === null) {
       setError(unit === 'metric' ? `Enter a length like 4.2, 420cm or 13' 9"` : `Enter a length like 13' 9", 13ft 9in or 4.2m`);
       return;
@@ -94,10 +98,10 @@ export function LengthInput({
     <span className={`length-input ${className ?? ''}`}>
       <input
         type="text"
-        inputMode="decimal"
+        inputMode={unit === 'metric' ? 'decimal' : 'text'}
         aria-label={ariaLabel}
         aria-invalid={error !== null}
-        aria-describedby={error ? errorId : undefined}
+        aria-describedby={error ? `${unitId} ${errorId}` : unitId}
         className={error ? 'invalid' : ''}
         value={text}
         placeholder={placeholder ?? (unit === 'metric' ? '0.00' : `0' 0"`)}
@@ -106,9 +110,18 @@ export function LengthInput({
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setText(display(value));
+            setError(null);
+          }
         }}
       />
-      <span className="unit">{unit === 'metric' ? 'm' : 'ft in'}</span>
+      <span className="unit" aria-hidden="true">{unit === 'metric' ? 'm' : 'ft in'}</span>
+      <span id={unitId} className="sr-only">
+        {unit === 'metric' ? 'Length in metres. You can also enter 420cm or 4200mm.' : `Length in feet and inches. You can also enter 13ft 9in or 4.2m.`}
+        {' '}Press Enter to apply or Escape to undo your typing.
+      </span>
       {error ? (
         <span className="field-hint invalid" role="alert" id={errorId}>
           {error}
@@ -208,21 +221,26 @@ export function Checkbox({ checked, onChange, label, disabled }: { checked: bool
   );
 }
 
-export function Section({ title, children, actions, collapsible, defaultOpen = true }: { title: ReactNode; children: ReactNode; actions?: ReactNode; collapsible?: boolean; defaultOpen?: boolean }) {
+export function Section({ title, children, actions, description, collapsible, defaultOpen = true }: { title: ReactNode; children: ReactNode; actions?: ReactNode; description?: ReactNode; collapsible?: boolean; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
+  const id = useId();
+  const hasHeading = isValidElement(title) && typeof title.type === 'string' && /^h[1-6]$/.test(title.type);
   return (
     <section className="section">
       <header className="section-header">
         {collapsible ? (
-          <button type="button" className="link" aria-expanded={open} onClick={() => setOpen(!open)}>
-            {open ? '▾' : '▸'} {title}
-          </button>
-        ) : (
+          <h3>
+            <button type="button" className="link section-toggle" aria-expanded={open} aria-controls={id} aria-describedby={description ? `${id}-description` : undefined} onClick={() => setOpen(!open)}>
+              <span aria-hidden="true">{open ? '▾' : '▸'}</span> {title}
+            </button>
+          </h3>
+        ) : hasHeading ? title : (
           <h3>{title}</h3>
         )}
         {actions ? <span className="section-actions">{actions}</span> : null}
       </header>
-      {open ? <div className="section-body">{children}</div> : null}
+      {description ? <p className="field-hint section-description" id={`${id}-description`}>{description}</p> : null}
+      <div className="section-body" id={id} hidden={!open}>{open ? children : null}</div>
     </section>
   );
 }

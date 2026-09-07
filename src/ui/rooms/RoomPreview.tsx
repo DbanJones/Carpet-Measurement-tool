@@ -6,6 +6,7 @@
  * Coordinates are millimetres straight from the engine (viewBox in mm), so stroke widths use
  * `vector-effect: non-scaling-stroke` (px on screen) and text sizes are scaled to the room.
  */
+import { useId, type ReactNode, type SVGProps } from 'react';
 import type { CutPiece, Doorway, Point, Polygon, RoomShape, Seam } from '@engine/types';
 import { boundingBox, centroid, doorwaySegment, edgeLength, shapeToPolygon, signedArea } from '@engine/geometry';
 import { formatLength } from '@ui/components/inputs';
@@ -29,6 +30,8 @@ export interface RoomPreviewProps {
   /** Circled edge numbers matching the doorway table (default on). */
   showEdgeNumbers?: boolean;
   className?: string;
+  /** Optional editing surface; result and print previews remain presentation only. */
+  editing?: { children: ReactNode; svgProps?: SVGProps<SVGSVGElement>; viewBox?: string; polygon?: Polygon };
 }
 
 /** `shapeToPolygon` that never throws and never returns non-finite coordinates. */
@@ -54,10 +57,12 @@ export function RoomPreview({
   showDimensions = true,
   showEdgeNumbers = true,
   className,
+  editing,
 }: RoomPreviewProps) {
+  const descriptionId = useId();
   const storeUnit = useProjectStore((s) => s.project.displayUnit);
   const u = unit ?? storeUnit;
-  const poly = safePolygon(room.shape);
+  const poly = editing?.polygon ?? safePolygon(room.shape);
   const ariaLabel = room.name ? `Plan of ${room.name}` : 'Room plan';
   const svgClass = `diagram room-preview${className ? ` ${className}` : ''}`;
 
@@ -106,7 +111,9 @@ export function RoomPreview({
   const doorways = (room.doorways ?? []).filter((d) => Number.isInteger(d.edgeIndex) && d.edgeIndex >= 0 && d.edgeIndex < poly.length);
 
   return (
-    <svg className={svgClass} viewBox={viewBox} preserveAspectRatio="xMidYMid meet" role="img" aria-label={ariaLabel} data-testid="room-preview">
+    <figure className="room-preview-figure">
+    <svg className={svgClass} viewBox={editing?.viewBox ?? viewBox} preserveAspectRatio="xMidYMid meet" role={editing ? 'group' : 'img'} aria-label={editing ? `Editable plan of ${room.name || 'room'}` : ariaLabel} aria-describedby={descriptionId} data-testid="room-preview" {...editing?.svgProps}>
+      <desc id={descriptionId}>{`Overall ${formatLength(bb.maxX - bb.minX, u)} by ${formatLength(bb.maxY - bb.minY, u)}. ${poly.length} walls, ${doorways.length} doorways, ${drawnSeams.length} seams.${showPileArrow ? ` Pile runs ${showPileArrow === 'along_length' ? 'left to right' : 'top to bottom'}.` : ''}`}</desc>
       <polygon className="room" points={pointsAttr(poly)} vectorEffect="non-scaling-stroke" />
 
       {placedPieces.map((piece) => {
@@ -114,13 +121,18 @@ export function RoomPreview({
         const c = centroid(pts);
         return (
           <g key={piece.id} data-piece-id={piece.id}>
-            <polygon className={piece.role === 'fill' ? 'piece fill' : 'piece'} points={pointsAttr(pts)} vectorEffect="non-scaling-stroke" />
+            <polygon className={piece.role === 'fill' ? 'piece fill' : 'piece'} points={pointsAttr(pts)} vectorEffect="non-scaling-stroke">
+              <title>{`${piece.label}: ${formatLength(piece.length, u)} along the roll × ${formatLength(piece.width, u)} across`}</title>
+            </polygon>
             <text className="piece-label" x={fmt(c.x)} y={fmt(c.y)} textAnchor="middle" dominantBaseline="central" style={{ fontSize: fs * 0.8 }}>
               {piece.label}
             </text>
           </g>
         );
       })}
+
+      {/* Keep the measured wall visible above pieces that include trimming allowances. */}
+      <polygon className="room-outline" points={pointsAttr(poly)} fill="none" stroke="#333" strokeWidth="2" vectorEffect="non-scaling-stroke" />
 
       {drawnSeams.map((s, i) => (
         <line
@@ -181,7 +193,17 @@ export function RoomPreview({
       })}
 
       {showPileArrow ? <PileArrow x={minX - pad + fs * 0.4} y={minY - pad + fs * 0.9} fs={fs} direction={showPileArrow} /> : null}
+      {editing?.children}
     </svg>
+    <figcaption className="room-plan-key small muted">
+      {showEdgeNumbers ? <span>Numbered circles = walls</span> : null}
+      {doorways.length > 0 ? <span><i className="plan-key-line door" aria-hidden="true" />Door opening</span> : null}
+      {drawnSeams.some((seam) => seam.kind === 'side') ? <span><i className="plan-key-line seam" aria-hidden="true" />Side seam</span> : null}
+      {drawnSeams.some((seam) => seam.kind === 'cross') ? <span><i className="plan-key-line cross" aria-hidden="true" />Cross seam</span> : null}
+      {showPileArrow ? <span>Arrow = pile / laying direction</span> : null}
+      {placedPieces.length > 0 ? <span>Cut pieces include fitting allowances outside the room outline.</span> : null}
+    </figcaption>
+    </figure>
   );
 }
 

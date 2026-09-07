@@ -6,7 +6,7 @@
  * All state lives in the project store (millimetres); inputs display in the project's unit through
  * the shared LengthInput. Nothing here duplicates the engine — stairs.ts does the quantities.
  */
-import type { ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { useProjectStore, makeSteps } from '@store/projectStore';
 import { newId } from '@store/ids';
 import type { CoveringKind, Landing, Mm, Product, Staircase, Step, StepKind, Subfloor, SubfloorCondition, SubfloorType } from '@engine/types';
@@ -15,10 +15,16 @@ import { DEFAULT_NOSING_OVERHANG, DEFAULT_STEP, RUNNER_DEFAULT_WIDTH, STAIR_REGS
 import { MM_PER_INCH } from '@engine/units';
 import { Checkbox, Field, LengthInput, NumberInput, Section, Select, formatLength, FieldGroup } from '@ui/components/inputs';
 import { StairsPreview } from './StairsPreview';
+import { StairLayoutEditor } from './StairLayoutEditor';
+import { StairDesigner } from './StairDesigner';
+import { StairSetupWizard } from '@ui/setup/StairSetupWizard';
+import { changeStepKind, curveSteps, deleteSteps, editableSteps, insertStep, patchStepMeasurements, reconcileStepPlans, stairFlightDimensions } from './stepEditing';
+import { MAX_RISERS } from './stairLimits';
+import './stairs-editor.css';
 
 type Unit = 'metric' | 'imperial';
 
-export const MAX_RISERS = 30;
+export { MAX_RISERS } from './stairLimits';
 /** Narrow-end going given to a newly inserted winder (a typical kite winder at the newel post). */
 export const DEFAULT_WINDER_NARROW_GOING: Mm = 100;
 /** Default landing when the user adds one: a metre-long top landing as wide as the flight. */
@@ -99,7 +105,7 @@ export function flightPitchDeg(steps: Step[]): number | null {
   let rise = 0;
   let going = 0;
   for (const s of steps) {
-    if (s.kind === 'winder') continue;
+    if (s.kind === 'winder' || s.outline) continue;
     rise += s.rise > 0 ? s.rise : 0;
     going += s.going > 0 ? s.going : 0;
   }
@@ -117,7 +123,7 @@ export function stepRegsIssues(step: Step): RegsIssue[] {
   if (step.rise > 0 && (step.rise < STAIR_REGS.minRise || step.rise > STAIR_REGS.maxRise)) {
     issues.push({ code: 'rise', text: `rise ${Math.round(step.rise)} mm is outside ${STAIR_REGS.minRise}–${STAIR_REGS.maxRise} mm` });
   }
-  if (step.kind !== 'winder' && step.going > 0) {
+  if (step.kind !== 'winder' && !step.outline && step.going > 0) {
     if (step.going < STAIR_REGS.minGoing || step.going > STAIR_REGS.maxGoing) {
       issues.push({ code: 'going', text: `going ${Math.round(step.going)} mm is outside ${STAIR_REGS.minGoing}–${STAIR_REGS.maxGoing} mm` });
     }
@@ -139,7 +145,8 @@ export function formatStairDim(mm: Mm, unit: Unit): string {
 /** Change a step's kind, carrying its dimensions and giving kind-specific fields sensible starts. */
 export function withKind(step: Step, kind: StepKind): Step {
   const next: Step = { id: step.id, kind, rise: step.rise, going: step.going, width: step.width };
-  if (kind === 'winder') next.goingNarrow = step.goingNarrow ?? DEFAULT_WINDER_NARROW_GOING;
+  if (step.plan) next.plan = { ...step.plan, turn: kind === 'winder' ? step.plan.turn || -30 : 0 };
+  if (kind === 'winder') next.goingNarrow = step.outline ? DEFAULT_WINDER_NARROW_GOING : step.goingNarrow ?? DEFAULT_WINDER_NARROW_GOING;
   if (kind === 'bullnose' || kind === 'curtail') {
     if (step.bullnoseProjection !== undefined) next.bullnoseProjection = step.bullnoseProjection;
     next.bullnoseSides = kind === 'curtail' ? 'both' : (step.bullnoseSides ?? 'right');
@@ -157,6 +164,7 @@ function plural(n: number, word: string): string {
 // ---------------------------------------------------------------------------
 
 export function StairsEditor({ staircaseId }: { staircaseId: string }) {
+  const projectId = useProjectStore((s) => s.project.id);
   const staircase = useProjectStore((s) => s.project.staircases.find((x) => x.id === staircaseId));
   if (!staircase) {
     return (
@@ -165,19 +173,33 @@ export function StairsEditor({ staircaseId }: { staircaseId: string }) {
       </div>
     );
   }
-  return <StairsForm staircase={staircase} />;
+  return <StairsForm key={`${projectId}:${staircase.id}`} staircase={staircase} />;
 }
 
 function StairsForm({ staircase }: { staircase: Staircase }) {
+  const [guided, setGuided] = useState(false);
+  const [selectedSteps, setSelectedSteps] = useState<string[]>([]);
+  const [rejectedStep, setRejectedStep] = useState<{ id: string; revision: number }>();
+  const detailsId = useId();
   const products = useProjectStore((s) => s.project.products);
   const unit = useProjectStore((s) => s.project.displayUnit);
-  const updateStaircase = useProjectStore((s) => s.updateStaircase);
+  const rawUpdateStaircase = useProjectStore((s) => s.updateStaircase);
+  const updateStaircase: typeof rawUpdateStaircase = (id, patch) => rawUpdateStaircase(id, current => reconcileStepPlans(current, typeof patch === 'function' ? patch(current) : { ...current, ...patch }));
   const removeStaircase = useProjectStore((s) => s.removeStaircase);
+  const duplicateStaircase = useProjectStore((s) => s.duplicateStaircase);
 
   const { id, steps, landings } = staircase;
   const patch = (p: Partial<Staircase>) => updateStaircase(id, p);
   const patchSteps = (fn: (steps: Step[]) => Step[]) => updateStaircase(id, (s) => ({ ...s, steps: fn(s.steps) }));
-  const patchStep = (stepId: string, p: Partial<Step>) => patchSteps((all) => all.map((st) => (st.id === stepId ? { ...st, ...p } : st)));
+  const patchStep = (stepId: string, p: Partial<Step>) => {
+    let rejected = false;
+    updateStaircase(id, s => {
+      const next = p.plan ? { ...s, steps: s.steps.map(step => step.id === stepId ? { ...step, ...p } : step) } : patchStepMeasurements(s, stepId, p);
+      rejected = next === s;
+      return next;
+    });
+    setRejectedStep(previous => rejected ? { id: stepId, revision: (previous?.revision ?? 0) + 1 } : undefined);
+  };
   const patchLanding = (landingId: string, p: Partial<Landing>) =>
     updateStaircase(id, (s) => ({ ...s, landings: s.landings.map((l) => (l.id === landingId ? { ...l, ...p } : l)) }));
 
@@ -204,7 +226,8 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
       if (count === all.length) return all;
       if (count < all.length) return all.slice(0, count);
       const last = all[all.length - 1];
-      const base: Omit<Step, 'id'> = last ? { kind: 'straight', rise: last.rise, going: last.going, width: last.width } : DEFAULT_STEP;
+      const dimensions = stairFlightDimensions({ ...staircase, steps: all }, all.length - 1);
+      const base: Omit<Step, 'id'> = last ? { kind: 'straight', rise: last.rise, going: last.kind === 'straight' && !last.outline ? last.going : dimensions.going, width: dimensions.width } : DEFAULT_STEP;
       return [...all, ...makeSteps(count - all.length, base)];
     });
 
@@ -234,23 +257,12 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
     updateStaircase(id, (s) => {
       const src = s.steps[index];
       if (!src) return s;
-      const winder: Step = { id: newId('step'), kind: 'winder', rise: src.rise, going: src.going, width: src.width, goingNarrow: DEFAULT_WINDER_NARROW_GOING };
-      const nextSteps = [...s.steps.slice(0, index + 1), winder, ...s.steps.slice(index + 1)];
-      // a landing recorded after step i (or higher) now follows the winder too
-      const nextLandings = s.landings.map((l) => (l.afterStepIndex >= index ? { ...l, afterStepIndex: l.afterStepIndex + 1 } : l));
-      return { ...s, steps: nextSteps, landings: nextLandings };
+      const inserted = insertStep(s, src.id);
+      const added = inserted.steps.find(step => !s.steps.some(old => old.id === step.id));
+      return added && added.kind !== 'winder' ? changeStepKind(inserted, added.id, 'winder') : inserted;
     });
   const deleteStep = (index: number) =>
-    updateStaircase(id, (s) => {
-      if (s.steps.length <= 1) return s;
-      // there is no undo in the app and the row holds a measured rise, going and width
-      const nextSteps = s.steps.filter((_, i) => i !== index);
-      const nextLandings = s.landings.map((l) => {
-        const shifted = l.afterStepIndex > index ? l.afterStepIndex - 1 : l.afterStepIndex;
-        return { ...l, afterStepIndex: Math.min(shifted, nextSteps.length - 1) };
-      });
-      return { ...s, steps: nextSteps, landings: nextLandings };
-    });
+    updateStaircase(id, s => s.steps[index] ? deleteSteps(s, [s.steps[index]!.id]) : s);
 
   const hasWinders = steps.some((s) => s.kind === 'winder');
   const hasCurved = steps.some((s) => s.kind === 'bullnose' || s.kind === 'curtail');
@@ -300,12 +312,32 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
   if (staircase.openSides !== 'none') summaryParts.push(staircase.openSides === 'both' ? 'both strings open' : `${staircase.openSides} string open`);
   const summary = summaryParts.join(', ');
 
+  const varyingDimensions = (['rise', 'going', 'width'] as const).filter((key) => commonValue(key) === undefined);
+  const unusualSteps = summaryParts.filter((part) => /winder|bullnose|curtail/.test(part));
+  const stepDetailSummary = [
+    unusualSteps.length ? unusualSteps.join(', ') : 'All straight steps',
+    varyingDimensions.length ? 'individual measurements recorded' : 'matching measurements',
+  ].join(' · ');
+  const fittingSummary = [
+    staircase.method === 'waterfall' ? 'Waterfall' : 'A separate piece per step (cap & band)',
+    staircase.runner ? `${formatStairDim(staircase.runner.width, unit)} runner${staircase.runner.stairRods ? ' with stair rods' : ''}` : 'full width',
+    staircase.openSides === 'none' ? 'closed both sides' : `${staircase.openSides === 'both' ? 'both' : staircase.openSides} side${staircase.openSides === 'both' ? 's' : ''} open`,
+    `${formatStairDim(staircase.nosingOverhang ?? DEFAULT_NOSING_OVERHANG, unit)} nosing`,
+    ...(staircase.topRiserByLanding ? ['top riser covered by landing'] : []),
+    ...(staircase.subfloor ? [`${SUBFLOOR_TYPE_OPTIONS.find((option) => option.value === staircase.subfloor?.type)?.label}, ${staircase.subfloor.condition}`] : []),
+    ...(staircase.notes ? ['quote note recorded'] : []),
+  ].join(' · ');
+  const stepsToCheck = steps.filter((step) => stepRegsIssues(step).length > 0).length;
+
+  if (guided) return <div className="panel stairs-editor"><StairSetupWizard staircase={staircase} unit={unit} onCancel={() => setGuided(false)} onApply={next => { rawUpdateStaircase(id, next); setSelectedSteps([]); setGuided(false); }}/></div>;
+
   return (
-    <div className="panel stairs-editor">
+    <div className="panel stairs-editor stairs-simple stairs-drawing-first">
+      <div className="stairs-guide-entry"><div><strong>Start with the steps and the turn</strong><p>Set the count, rotation and whether the corner has steps or a landing.</p></div><button type="button" onClick={() => setGuided(true)}>Guide me through stairs</button></div>
       <Section
         title={<h2 className="stairs-title">{staircase.name || 'Stairs'}</h2>}
         actions={
-          <button
+          <><button type="button" onClick={() => duplicateStaircase(id)}>Duplicate staircase</button><button
             type="button"
             className="danger"
             onClick={() => {
@@ -313,98 +345,28 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
             }}
           >
             Delete staircase
-          </button>
+          </button></>
         }
       >
+        <p className="stairs-intro">Edit your staircase on the plan. Select a step to reshape it, add a step or place a landing. <a href={`#${detailsId}`}>More details</a> covers fitting and measurements.</p>
         <div className="grid-2">
           <Field label="Name">
             <input type="text" aria-label="Staircase name" value={staircase.name} onChange={(e) => patch({ name: e.target.value })} />
           </Field>
-          <Field label="Product" hint={productNote ?? 'Carpet products are listed first.'}>
+          <Field label="Floor covering" hint={productNote ?? undefined}>
             <Select ariaLabel="Product" value={staircase.productId} options={productOptions} onChange={(productId) => patch({ productId })} />
           </Field>
         </div>
-        <Field label="Notes" hint="Shown on the quote.">
-          <textarea aria-label="Staircase notes" rows={2} value={staircase.notes ?? ''} onChange={(e) => patch({ notes: e.target.value })} />
-        </Field>
-      </Section>
-
-      <Section title="Flight">
-        <div className="grid-2">
-          <Field label="Number of risers" hint="Count the risers from the bottom floor to the landing. Adding risers copies the last step; removing takes them off the top.">
-            <NumberInput ariaLabel="Number of risers" value={n} min={1} max={MAX_RISERS} integer onChange={setRiserCount} />
-          </Field>
-          <Field label="Nosing overhang" hint="How far each tread projects beyond its riser; the carpet wraps under it.">
-            <LengthInput ariaLabel="Nosing overhang" value={staircase.nosingOverhang ?? DEFAULT_NOSING_OVERHANG} unit={unit} onChange={(nosingOverhang) => patch({ nosingOverhang })} />
-          </Field>
-        </div>
-        <FieldGroup label="Apply to all steps" hint="Sets the value on every step; fine-tune individual steps in the table below. Blank means the steps differ.">
-          <div className="row">
-            <Field inline label="Rise">
-              <LengthInput ariaLabel="Rise for all steps" value={commonValue('rise')} unit={unit} placeholder="varies" onChange={(v) => applyToAll('rise', v)} />
-            </Field>
-            <Field inline label="Going">
-              <LengthInput ariaLabel="Going for all steps" value={commonValue('going')} unit={unit} placeholder="varies" onChange={(v) => applyToAll('going', v)} />
-            </Field>
-            <Field inline label="Width">
-              <LengthInput ariaLabel="Width for all steps" value={commonValue('width')} unit={unit} placeholder="varies" onChange={(v) => applyToAll('width', v)} />
-            </Field>
-          </div>
-        </FieldGroup>
-        <div className="grid-2">
-          <Field label="Method" hint={METHOD_NOTE[staircase.method]}>
-            <Select ariaLabel="Fitting method" value={staircase.method} options={METHOD_OPTIONS} onChange={(method) => patch({ method })} />
-          </Field>
-          <Field label="Open sides" hint="On an open string the carpet wraps the open edge and is bound.">
-            <Select ariaLabel="Open sides" value={staircase.openSides} options={OPEN_SIDE_OPTIONS} onChange={(openSides) => patch({ openSides })} />
-          </Field>
-        </div>
-        <div className="stack stairs-runner">
-          <Checkbox
-            label={<span>Fit as a runner (bound both edges){isCarpet ? '' : ' — carpet only'}</span>}
-            checked={Boolean(staircase.runner)}
-            onChange={setRunner}
-          />
-          {staircase.runner ? (
-            <div className="row">
-              <Field inline label="Runner width">
-                <LengthInput ariaLabel="Runner width" value={staircase.runner.width} unit={unit} onChange={(width) => patch({ runner: { ...staircase.runner!, width } })} />
-              </Field>
-              <Checkbox label="Stair rods (one per step)" checked={staircase.runner.stairRods} onChange={(stairRods) => patch({ runner: { ...staircase.runner!, stairRods } })} />
-            </div>
-          ) : null}
-          <Checkbox
-            label="Landing carpet covers the top riser (the stair carpet stops one riser short)"
-            checked={Boolean(staircase.topRiserByLanding)}
-            onChange={(topRiserByLanding) => patch({ topRiserByLanding })}
-          />
-        </div>
-        <FieldGroup label="Subfloor (optional)" hint="Drives floor preparation: uneven or poor treads want ply or hardboard first.">
-          <div className="row">
-            <Select ariaLabel="Subfloor type" value={staircase.subfloor?.type ?? 'unset'} options={SUBFLOOR_TYPE_OPTIONS} onChange={setSubfloorType} />
-            <Select
-              ariaLabel="Subfloor condition"
-              value={staircase.subfloor?.condition ?? 'good'}
-              options={SUBFLOOR_CONDITION_OPTIONS}
-              disabled={!staircase.subfloor}
-              onChange={(condition) => {
-                if (staircase.subfloor) patch({ subfloor: { ...staircase.subfloor, condition } });
-              }}
-            />
-          </div>
-        </FieldGroup>
-      </Section>
-
-      <Section
-        title="Steps (from the bottom up)"
-        actions={
+      <StairDetails title="Individual steps and turns" summary={stepDetailSummary}>
+        <p className="field-hint">Steps are numbered from the bottom. Change one measurement, choose a winder or rounded step, or insert a step where the flight turns.</p>
+        <p>
           <span className={pitchTooSteep ? 'badge warn' : 'badge'}>
             {pitchTooSteep ? '⚠ ' : ''}Pitch {flightPitch === null ? '—' : `${flightPitch.toFixed(1)}°`}
             {pitchTooSteep ? ` — steeper than ${STAIR_REGS.maxPitchDeg}°` : ''}
             <span className="sr-only"> (total rise over total going of the straight steps)</span>
           </span>
-        }
-      >
+        </p>
+        {rejectedStep ? <p role="alert" className="warning">That measurement would cross or collapse a tread. The saved dimensions have been restored. Select the step on the diagram to adjust its shared corners.</p> : null}
         <div className="stairs-table-wrap">
           <table className="data stairs-table">
             <thead>
@@ -429,15 +391,18 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
             <tbody>
               {steps.map((step, index) => (
                 <StepRow
-                  key={step.id}
+                  key={`${step.id}:${rejectedStep?.id === step.id ? rejectedStep.revision : 0}`}
                   step={step}
                   index={index}
                   count={n}
                   unit={unit}
                   hasWinders={hasWinders}
                   hasCurved={hasCurved}
+                  selected={selectedSteps.includes(step.id)}
+                  onSelect={() => setSelectedSteps(old => old.includes(step.id) ? old.filter(id => id !== step.id) : [...old, step.id])}
+                  onPlanPatch={(p) => updateStaircase(id, current => { if (p.turn !== undefined) return curveSteps(current, [step.id], p.turn); const editable = editableSteps(current); return { ...editable, steps: editable.steps.map(item => item.id === step.id ? { ...item, plan: { ...item.plan!, ...p } } : item) }; })}
                   onPatch={(p) => patchStep(step.id, p)}
-                  onKind={(kind) => patchSteps((all) => all.map((st) => (st.id === step.id ? withKind(st, kind) : st)))}
+                  onKind={(kind) => updateStaircase(id, s => changeStepKind(s, step.id, kind))}
                   onInsertWinder={() => insertWinderAbove(index)}
                   onDelete={() => {
                     if (window.confirm(`Delete step ${index + 1}? Its measured rise, going and width are lost.`)) deleteStep(index);
@@ -451,16 +416,66 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
           Regs: Approved Document K for a private stair — rise {STAIR_REGS.minRise}–{STAIR_REGS.maxRise} mm, going {STAIR_REGS.minGoing}–{STAIR_REGS.maxGoing} mm, pitch at most {STAIR_REGS.maxPitchDeg}°. Older
           houses are often outside; a flag is a prompt to re-check the tape, not an error.
         </p>
+      </StairDetails>
+
+        <StairDesigner staircase={staircase} unit={unit} selectedIds={selectedSteps} onSelectionChange={setSelectedSteps} />
+        <div className="stairs-measurement-heading"><div className="eyebrow">2 · CHECK THE MEASUREMENTS</div><h3>Size the steps</h3></div>
+        <div className="stairs-core-dimensions">
+          <Field label="Number of risers" hint="Count the vertical faces, including the rise to the top landing.">
+            <NumberInput ariaLabel="Number of risers" value={n} min={1} max={MAX_RISERS} integer onChange={setRiserCount} />
+          </Field>
+          <Field label="Rise (step height)" hint={unit === 'metric' ? 'For example, 200mm' : 'For example, 8"'}>
+            <LengthInput ariaLabel="Rise for all steps" value={commonValue('rise')} unit={unit} placeholder="varies" onChange={(v) => applyToAll('rise', v)} />
+          </Field>
+          <Field label="Tread depth (going)" hint="Measure horizontally from one tread's front edge to the next.">
+            <LengthInput ariaLabel="Going for all steps" value={commonValue('going')} unit={unit} placeholder="varies" onChange={(v) => applyToAll('going', v)} />
+          </Field>
+          <Field label="Stair width" hint="Measure across the stair, from side to side.">
+            <LengthInput ariaLabel="Width for all steps" value={commonValue('width')} unit={unit} placeholder="varies" onChange={(v) => applyToAll('width', v)} />
+          </Field>
+        </div>
+        <p className="field-hint stairs-dimension-note">Use your measured dimensions. Changing a dimension here applies it to every step. Adding risers copies the last step; reducing the count removes steps from the top.</p>
+        {varyingDimensions.length > 0 ? <p className="stairs-complex-note">This flight has individual measurements. “Varies” keeps those values; entering a value replaces that dimension on every step. Open Individual steps and turns to change just one.</p> : null}
+        {stepsToCheck > 0 ? <p className="stairs-complex-note">Check the measurements on {plural(stepsToCheck, 'step')}. Open Individual steps and turns for the measurement checks.</p> : null}
       </Section>
 
-      <Section
-        title="Landings"
-        actions={
-          <button type="button" onClick={addLanding}>
-            + Add landing
-          </button>
-        }
-      >
+      <Section title="Your staircase">
+        <div className="kpis">
+          <div className="kpi">
+            <div className="value">{formatLength(totalRise, unit)}</div>
+            <div className="label">Total rise</div>
+          </div>
+          <div className="kpi">
+            <div className="value">{formatLength(totalGoing, unit)}</div>
+            <div className="label">Total going{landingRun > 0 ? ` (+ ${formatLength(landingRun, unit)} of landings)` : ''}</div>
+          </div>
+          <div className="kpi">
+            <div className="value">{n}</div>
+            <div className="label">Risers</div>
+          </div>
+          <div className="kpi">
+            <div className="value">{Math.max(0, n - 1)}</div>
+            <div className="label">Treads (the top tread is the landing)</div>
+          </div>
+        </div>
+        <p className="stairs-summary" data-testid="stairs-summary">
+          {summary}
+        </p>
+      </Section>
+
+      <div className="stairs-more" id={detailsId} tabIndex={-1}>
+        <h3>Add detail when you need it</h3>
+        <p className="field-hint">These settings are already included in the estimate. Expand a section to review or change them.</p>
+      </div>
+      <StairDetails title="Measured turns and shape presets" summary={staircase.drawing ? 'Custom route drawn · adjust the measured turning treads when needed' : 'Winders, turning landings and curve measurements'}>
+        <p className="field-hint">Use this when a measured turn should change the tread types used for cutting. Applying a preset replaces a custom drawing; the individual step measurements remain editable.</p>
+        <StairLayoutEditor key={`${id}-${steps.length}`} staircase={staircase} unit={unit} />
+      </StairDetails>
+      <StairDetails title="Unfolded measurement profile" summary="View the measured rise and going of every step in walking order">
+        <StairsPreview staircase={staircase} unit={unit} />
+      </StairDetails>
+      <StairDetails title="Landings" summary={landings.length ? `${plural(landings.length, 'landing')} included · ${formatLength(landingRun, unit)} total run` : 'None included · add a top landing or a landing at a turn'}>
+        <button type="button" onClick={addLanding}>+ Add landing</button>
         {landings.length === 0 ? (
           <div className="empty small">No landings. Add a quarter or half landing where the flight turns, or the top landing if it is carpeted with the stairs.</div>
         ) : (
@@ -515,36 +530,76 @@ function StairsForm({ staircase }: { staircase: Staircase }) {
             </table>
           </div>
         )}
-      </Section>
+      </StairDetails>
 
-      <Section title="Preview">
-        <StairsPreview staircase={staircase} unit={unit} />
-      </Section>
-
-      <Section title="Totals">
-        <div className="kpis">
-          <div className="kpi">
-            <div className="value">{formatLength(totalRise, unit)}</div>
-            <div className="label">Total rise</div>
-          </div>
-          <div className="kpi">
-            <div className="value">{formatLength(totalGoing, unit)}</div>
-            <div className="label">Total going{landingRun > 0 ? ` (+ ${formatLength(landingRun, unit)} of landings)` : ''}</div>
-          </div>
-          <div className="kpi">
-            <div className="value">{n}</div>
-            <div className="label">Risers</div>
-          </div>
-          <div className="kpi">
-            <div className="value">{Math.max(0, n - 1)}</div>
-            <div className="label">Treads (the top tread is the landing)</div>
-          </div>
+      <StairDetails title="Fitting, runner and preparation" summary={fittingSummary}>
+        <Field label="Nosing overhang" hint="How far each tread projects beyond its riser; the carpet wraps under it.">
+          <LengthInput ariaLabel="Nosing overhang" value={staircase.nosingOverhang ?? DEFAULT_NOSING_OVERHANG} unit={unit} onChange={(nosingOverhang) => patch({ nosingOverhang })} />
+        </Field>
+        <div className="grid-2">
+          <Field label="Method" hint={METHOD_NOTE[staircase.method]}>
+            <Select ariaLabel="Fitting method" value={staircase.method} options={METHOD_OPTIONS} onChange={(method) => patch({ method })} />
+          </Field>
+          <Field label="Open sides" hint="On an open string the carpet wraps the open edge and is bound.">
+            <Select ariaLabel="Open sides" value={staircase.openSides} options={OPEN_SIDE_OPTIONS} onChange={(openSides) => patch({ openSides })} />
+          </Field>
         </div>
-        <p className="stairs-summary" data-testid="stairs-summary">
-          {summary}
-        </p>
-      </Section>
+        <div className="stack stairs-runner">
+          <Checkbox
+            label={<span>Fit as a runner (bound both edges){isCarpet ? '' : ' — carpet only'}</span>}
+            checked={Boolean(staircase.runner)}
+            onChange={setRunner}
+          />
+          {staircase.runner ? (
+            <div className="row">
+              <Field inline label="Runner width">
+                <LengthInput ariaLabel="Runner width" value={staircase.runner.width} unit={unit} onChange={(width) => patch({ runner: { ...staircase.runner!, width } })} />
+              </Field>
+              <Checkbox label="Stair rods (one per step)" checked={staircase.runner.stairRods} onChange={(stairRods) => patch({ runner: { ...staircase.runner!, stairRods } })} />
+            </div>
+          ) : null}
+          <Checkbox
+            label="Landing carpet covers the top riser (the stair carpet stops one riser short)"
+            checked={Boolean(staircase.topRiserByLanding)}
+            onChange={(topRiserByLanding) => patch({ topRiserByLanding })}
+          />
+        </div>
+        <FieldGroup label="Subfloor (optional)" hint="Drives floor preparation: uneven or poor treads want ply or hardboard first.">
+          <div className="row">
+            <Select ariaLabel="Subfloor type" value={staircase.subfloor?.type ?? 'unset'} options={SUBFLOOR_TYPE_OPTIONS} onChange={setSubfloorType} />
+            <Select
+              ariaLabel="Subfloor condition"
+              value={staircase.subfloor?.condition ?? 'good'}
+              options={SUBFLOOR_CONDITION_OPTIONS}
+              disabled={!staircase.subfloor}
+              onChange={(condition) => {
+                if (staircase.subfloor) patch({ subfloor: { ...staircase.subfloor, condition } });
+              }}
+            />
+          </div>
+        </FieldGroup>
+        <Field label="Notes" hint="Shown on the quote.">
+          <textarea aria-label="Staircase notes" rows={2} value={staircase.notes ?? ''} onChange={(e) => patch({ notes: e.target.value })} />
+        </Field>
+      </StairDetails>
     </div>
+  );
+}
+
+/** Unmounted closed content keeps optional fields out of the first screen and keyboard order. */
+function StairDetails({ title, summary, children }: { title: string; summary: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const contentId = useId();
+  return (
+    <section className="stairs-details">
+      <h3>
+        <button type="button" className="stairs-details-toggle" aria-expanded={open} aria-controls={contentId} onClick={() => setOpen((current) => !current)}>
+          <span><strong>{title}</strong><span className="stairs-details-summary">{summary}</span></span>
+          <span className="stairs-details-indicator" aria-hidden="true">{open ? '−' : '+'}</span>
+        </button>
+      </h3>
+      <div id={contentId} hidden={!open} className="stairs-details-content">{open ? children : null}</div>
+    </section>
   );
 }
 
@@ -563,6 +618,9 @@ function StepRow({
   onKind,
   onInsertWinder,
   onDelete,
+  selected,
+  onSelect,
+  onPlanPatch,
 }: {
   step: Step;
   index: number;
@@ -574,16 +632,19 @@ function StepRow({
   onKind: (kind: StepKind) => void;
   onInsertWinder: () => void;
   onDelete: () => void;
+  selected?: boolean;
+  onSelect?: () => void;
+  onPlanPatch?: (patch: Partial<NonNullable<Step['plan']>>) => void;
 }) {
   const no = index + 1;
   const isWinder = step.kind === 'winder';
   const isCurved = step.kind === 'bullnose' || step.kind === 'curtail';
   const issues = stepRegsIssues(step);
-  const pitch = isWinder ? null : pitchDeg(step.rise, step.going);
+  const pitch = isWinder || step.outline ? null : pitchDeg(step.rise, step.going);
   const pitchTooSteep = pitch !== null && pitch > STAIR_REGS.maxPitchDeg + 1e-9;
   return (
-    <tr className={`stairs-step stairs-step-${step.kind}`}>
-      <td className="num">{no}</td>
+    <tr className={`stairs-step stairs-step-${step.kind}${selected ? ' selected' : ''}`} data-step-row={step.id}>
+      <td className="num"><button type="button" className="step-row-select" aria-label={`Select step ${no} in table`} aria-pressed={!!selected} onClick={onSelect}>{no}</button></td>
       <td>
         <Select ariaLabel={`Step ${no} kind`} value={step.kind} options={STEP_KIND_OPTIONS} onChange={onKind} />
       </td>
@@ -599,7 +660,7 @@ function StepRow({
       {hasWinders ? (
         <td>
           {isWinder ? (
-            <LengthInput ariaLabel={`Step ${no} narrow going`} value={step.goingNarrow} unit={unit} placeholder="narrow end" onChange={(goingNarrow) => onPatch({ goingNarrow })} />
+            <>{step.outline ? <span className="small muted">From outline</span> : <LengthInput ariaLabel={`Step ${no} narrow going`} value={step.goingNarrow} unit={unit} placeholder="narrow end" onChange={(goingNarrow) => onPatch({ goingNarrow })} />}</>
           ) : (
             <span className="muted">—</span>
           )}
@@ -649,6 +710,7 @@ function StepRow({
         )}
       </td>
       <td className="stairs-step-actions">
+        {step.plan ? <details className="step-position-details"><summary>Position & turn</summary><LengthInput ariaLabel={`Step ${no} plan x`} min={-1000000} unit={unit} value={step.plan.x} onChange={x => onPlanPatch?.({ x })} /><LengthInput ariaLabel={`Step ${no} plan y`} min={-1000000} unit={unit} value={step.plan.y} onChange={y => onPlanPatch?.({ y })} /><NumberInput ariaLabel={`Step ${no} heading`} value={step.plan.heading} min={-360} max={360} suffix="°" onChange={heading => onPlanPatch?.({ heading })} /><NumberInput ariaLabel={`Step ${no} turn`} value={step.plan.turn ?? 0} min={-170} max={170} suffix="°" onChange={turn => onPlanPatch?.({ turn })} /></details> : null}
         <button type="button" aria-label={`Insert winder above step ${no}`} title="Insert a winder above this step" onClick={onInsertWinder}>
           + Winder
         </button>

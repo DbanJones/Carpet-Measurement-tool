@@ -32,6 +32,7 @@ vi.mock('@engine/estimate', async (importOriginal) => {
 });
 
 const state = () => useProjectStore.getState();
+const openEstimateView = (name: string | RegExp) => fireEvent.click(within(screen.getByRole('navigation', { name: 'Estimate sections' })).getByRole('button', { name }));
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
 
@@ -111,12 +112,12 @@ describe('ResultsPanel (compact)', () => {
     expect(packLines.some((t) => /: 2 packs$/.test(t))).toBe(true);
   });
 
-  it('shows the five most severe warnings with a link to the rest', () => {
+  it('shows the two most severe warnings with a link to the rest', () => {
     render(<ResultsPanel />);
     const list = screen.getByRole('list', { name: 'Warnings' });
-    expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
     // the sample house raises 21 notes
-    expect(screen.getByRole('button', { name: '16 more…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '19 more…' })).toBeTruthy();
   });
 
   it('switches to the Estimate tab from "Open full estimate"', () => {
@@ -135,6 +136,14 @@ describe('ResultsPanel (expanded)', () => {
     expect(screen.getByTestId('kpi-waste').textContent).toMatch(/^\d+\.\d%$/);
     expect(screen.getByTestId('kpi-rolls').textContent).toBe('4');
 
+    expect(screen.getByRole('heading', { name: 'Checks & assumptions' })).toBeTruthy();
+    const disclosure = screen.getByText('Notes').closest('details')!;
+    expect(disclosure.open).toBe(false);
+    const checks = screen.getByRole('heading', { name: 'Checks & assumptions' }).closest('section')!;
+    const warnings = within(checks).getByRole('list', { name: 'Warnings' });
+    expect(warnings.closest('details')).toBeNull();
+    expect(within(warnings).getAllByRole('listitem')).toHaveLength(2);
+    fireEvent.click(disclosure.querySelector('summary')!);
     const notes = screen.getByRole('list', { name: 'Notes' });
     expect(within(notes).getAllByRole('listitem')).toHaveLength(19);
     expect(within(notes).getAllByText(/existing gripper/).length).toBeGreaterThan(0);
@@ -144,8 +153,24 @@ describe('ResultsPanel (expanded)', () => {
     expect(screen.getAllByText(/cold-welded/).length).toBeGreaterThan(0);
   });
 
+  it('includes collapsed notes when printing, then restores the reader\'s disclosure choice', () => {
+    render(<ResultsPanel expanded />);
+    const disclosure = screen.getByText('Notes').closest('details')!;
+    expect(disclosure.open).toBe(false);
+    fireEvent(window, new Event('beforeprint'));
+    expect(disclosure.open).toBe(true);
+    expect(within(screen.getByRole('list', { name: 'Notes' })).getAllByRole('listitem')).toHaveLength(19);
+    fireEvent(window, new Event('afterprint'));
+    expect(disclosure.open).toBe(false);
+    fireEvent.click(disclosure.querySelector('summary')!);
+    fireEvent(window, new Event('beforeprint'));
+    fireEvent(window, new Event('afterprint'));
+    expect(disclosure.open).toBe(true);
+  });
+
   it('draws a cutting plan, its cuts and its offcuts for every roll good', () => {
     render(<ResultsPanel expanded />);
+    openEstimateView('Cutting plans');
     expect(screen.getAllByTestId('roll-cut-diagram')).toHaveLength(4);
     expect(screen.getAllByTestId('roll-plan-section')).toHaveLength(4);
 
@@ -164,6 +189,7 @@ describe('ResultsPanel (expanded)', () => {
 
   it('compares the 4 m and 5 m roll widths and flags the one using least material', () => {
     render(<ResultsPanel expanded />);
+    openEstimateView('Cutting plans');
     const table = within(section('prod-carpet-hall')).getByTestId('compare-table');
     const rows = within(table).getAllByTestId('compare-row');
     expect(rows.map((r) => r.getAttribute('data-roll-width'))).toEqual(['4000', '5000']);
@@ -179,13 +205,36 @@ describe('ResultsPanel (expanded)', () => {
     expect(within(rows[0]!).getByText('Current')).toBeTruthy();
   });
 
+  it('applies a compared roll width and keeps the previous width available', () => {
+    render(<ResultsPanel expanded />);
+    openEstimateView('Cutting plans');
+    const hall = within(section('prod-carpet-hall'));
+    fireEvent.click(hall.getByText(/Compare roll widths/));
+    fireEvent.click(hall.getByRole('button', { name: /^Use 5.00 m roll for Hall/ }));
+    const product = state().project.products.find((p) => p.id === 'prod-carpet-hall');
+    expect(product).toMatchObject({ rollWidth: 5000, alternativeRollWidths: [4000] });
+    expect(hall.getByTestId('roll-plan-summary').textContent).toContain('5.00 m');
+    fireEvent.click(hall.getByRole('button', { name: /^Use 4.00 m roll for Hall/ }));
+    expect(state().project.products.find((p) => p.id === 'prod-carpet-hall')).toMatchObject({ rollWidth: 4000, alternativeRollWidths: [5000] });
+  });
+
+  it('links warnings back to the room that needs attention', () => {
+    render(<ResultsPanel expanded />);
+    const review = screen.getAllByRole('button', { name: /^Review Kitchen \/ diner:/ })[0]!;
+    fireEvent.click(review);
+    expect(state().tab).toBe('rooms');
+    expect(state().selection).toEqual({ kind: 'room', id: state().project.rooms.find((r) => r.name === 'Kitchen / diner')!.id });
+  });
+
   it('renders a card per room and per staircase, and the bill of materials with its totals', () => {
     render(<ResultsPanel expanded />);
+    openEstimateView(/Rooms & stairs/);
     expect(screen.getAllByTestId('room-result')).toHaveLength(8);
     expect(screen.getAllByTestId('stair-result')).toHaveLength(1);
     expect(within(screen.getAllByTestId('room-result')[0]!).getByTestId('room-net-area').textContent).toMatch(/m²$/);
     expect(within(screen.getAllByTestId('stair-result')[0]!).getByTestId('stair-steps').textContent).toBe('13');
 
+    openEstimateView('Order list & costs');
     const bom = within(screen.getByTestId('bom-table'));
     expect(bom.getAllByText(/Carpet gripper, timber pin/).length).toBe(1);
     expect(bom.getAllByRole('row').length).toBeGreaterThan(40);
@@ -247,9 +296,10 @@ describe('ResultsPanel edge cases', () => {
     expect(within(list).getByText(/packer exploded/)).toBeTruthy();
     expect(list.querySelector('[data-code="ENGINE_ERROR"]')).toBeTruthy();
     expect(list.querySelector('[data-level="error"]')).toBeTruthy();
-    // the panel still renders, with zeroed figures
-    expect(screen.getByTestId('kpi-total').textContent).toBe('£0.00');
-    expect(screen.getByTestId('kpi-net-area').textContent).toBe('0.00 m²');
+    // A failed calculation must not look like a valid zero-cost quote.
+    expect(screen.getByTestId('kpi-total').textContent).toBe('—');
+    expect(screen.getByTestId('kpi-net-area').textContent).toBe('—');
+    expect(screen.getByText('Estimate unavailable')).toBeTruthy();
     expect(screen.queryAllByTestId('compact-roll-line')).toHaveLength(0);
   });
 
@@ -261,6 +311,21 @@ describe('ResultsPanel edge cases', () => {
     expect(screen.getByText(/Nothing to order yet/)).toBeTruthy();
     expect(screen.getAllByTestId('room-result')).toHaveLength(8);
     expect(screen.getByRole('list', { name: 'Errors' })).toBeTruthy();
+  });
+
+  it('marks missing required prices as a partial estimate and provides a path to pricing', () => {
+    const project = sampleProject();
+    const product = project.products.find((p) => p.id === 'prod-carpet-hall')!;
+    delete product.pricePerM2;
+    state().setProject(project);
+    render(<ResultsPanel expanded />);
+    expect(screen.getByText('Estimate incomplete')).toBeTruthy();
+    expect(screen.getAllByText('Partial total inc VAT').length).toBeGreaterThan(0);
+    expect(screen.getByText('Not priced')).toBeTruthy();
+    expect(bomCsv(estimateProject(project), project)).toContain('items without prices excluded from totals');
+    fireEvent.click(screen.getByRole('button', { name: 'Add missing prices' }));
+    expect(state().tab).toBe('materials');
+    expect(state().selection).toEqual({ kind: 'product', id: product.id });
   });
 });
 
@@ -321,6 +386,7 @@ describe('the printed quote', () => {
     expect(header.textContent).toContain('2026-04-20');
     // once under the bill of materials as terms, and once in the editable field
     expect(screen.getAllByText(/Price holds for 30 days/).length).toBeGreaterThan(0);
+    openEstimateView('Order list & costs');
     expect(screen.getByRole('heading', { name: 'Notes and terms' })).toBeTruthy();
   });
 
@@ -333,17 +399,29 @@ describe('the printed quote', () => {
     expect(screen.getByTestId('quote-header').textContent).toContain('Mr B Jones');
   });
 
-  it('keys the cutting plan so the printed diagram can be read without the tooltips', () => {
+  it('prints destination keys, numbered cut lists and offcuts, then restores collapsed details', () => {
     render(<ResultsPanel expanded />);
-    const legends = screen.getAllByText('Main piece');
-    expect(legends.length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Fill piece').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Stairs / landing').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Offcut').length).toBeGreaterThan(0);
+    openEstimateView('Cutting plans');
+    const hall = section('prod-carpet-hall');
+    const cutDetails = hall.querySelector<HTMLDetailsElement>('.roll-piece-details')!;
+    const inventory = hall.querySelector<HTMLDetailsElement>('details[data-print-expand]')!;
+    expect(cutDetails.open).toBe(false);
+    expect(inventory.open).toBe(false);
+    expect(within(hall).getAllByText('Where these pieces go').length).toBeGreaterThan(0);
+    expect(within(hall).getAllByText('Offcuts / spare material').length).toBeGreaterThan(0);
+    fireEvent(window, new Event('beforeprint'));
+    expect(cutDetails.open).toBe(true);
+    expect(inventory.open).toBe(true);
+    expect(within(cutDetails).getByRole('table').textContent).toContain('Stairs');
+    expect(within(cutDetails).getByRole('table').textContent).toMatch(/1A/);
+    fireEvent(window, new Event('afterprint'));
+    expect(cutDetails.open).toBe(false);
+    expect(inventory.open).toBe(false);
   });
 
   it('does not call a laminate room\'s perimeter a gripper perimeter', () => {
     render(<ResultsPanel expanded />);
+    openEstimateView(/Rooms & stairs/);
     // the box room is laminate: it gets no gripper at all
     expect(screen.getAllByText('Fixing / beading perimeter').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Gripper perimeter').length).toBeGreaterThan(0); // the carpet rooms

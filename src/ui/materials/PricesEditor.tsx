@@ -102,6 +102,7 @@ export function PricesEditor() {
       <CheckField checked={prices.applyVat} onChange={(applyVat) => updatePrices({ applyVat })} label="Add VAT to the estimate" hint="Untick for a VAT-exclusive trade quote or a non-registered fitter." />
 
       <h4>Labour rates</h4>
+      {prices.labourModel?.mode === 'hourly' ? <p className="field-hint">Hourly pricing is selected in Settings. These unit rates are retained for switching back; only the minimum job charge below also applies to hourly labour.</p> : null}
       <div className="table-scroll">
         <table className="data prices-table">
           <thead>

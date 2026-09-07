@@ -11,7 +11,6 @@
  * `ENGINE_ERROR` warning with the message, so the panel still renders and the user can see (and
  * report) what went wrong.
  */
-import { useMemo } from 'react';
 import { useProjectStore } from './projectStore';
 import { estimateProject, compareRollWidths, type ProjectEstimate, type RollWidthComparison } from '@engine/estimate';
 import { DOOR_BAR_TYPES, type DoorBarType } from '@engine/accessories';
@@ -52,6 +51,7 @@ export function emptyEstimate(warnings: Warning[] = []): ProjectEstimate {
     rooms: {},
     staircases: {},
     details: {
+      labourHours: { mode: 'unit_rates', hourlyRate: 0, baseHours: 0, allowanceHours: 0, totalHours: 0, optionalHours: 0, lines: [] },
       stairPlans: {},
       hardFloorPlans: {},
       doorBars: { bars: [], totalsByType, standardBars: 0, longBars: 0, warnings: [] },
@@ -82,6 +82,22 @@ export function compareRollWidthsOrEmpty(project: Project, productId: Id | undef
   }
 }
 
+// React's useMemo belongs to one component. Share the expensive computation between the running
+// total, editor and full estimate, and discard the cache when the current project changes.
+let currentCache: {
+  project: Project;
+  revision: number;
+  estimate?: ProjectEstimate;
+  comparisons: Map<Id, RollWidthComparison[]>;
+} | undefined;
+
+function projectCache(project: Project, revision: number) {
+  if (!currentCache || currentCache.project !== project || currentCache.revision !== revision) {
+    currentCache = { project, revision, comparisons: new Map() };
+  }
+  return currentCache;
+}
+
 /**
  * The estimate for the project in the store, recalculated whenever the project changes.
  *
@@ -91,9 +107,8 @@ export function compareRollWidthsOrEmpty(project: Project, productId: Id | undef
 export function useEstimate(): ProjectEstimate {
   const project = useProjectStore((s) => s.project);
   const revision = useProjectStore((s) => s.revision);
-  // `revision` is part of the key on purpose: it changes on every mutation, even one that mutated in place.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useMemo(() => estimateOrEmpty(project), [project, revision]);
+  const cache = projectCache(project, revision);
+  return cache.estimate ??= estimateOrEmpty(project);
 }
 
 /**
@@ -104,6 +119,12 @@ export function useEstimate(): ProjectEstimate {
 export function useRollWidthComparison(productId: Id | undefined): RollWidthComparison[] {
   const project = useProjectStore((s) => s.project);
   const revision = useProjectStore((s) => s.revision);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useMemo(() => compareRollWidthsOrEmpty(project, productId), [project, revision, productId]);
+  const cache = projectCache(project, revision);
+  const id = productId ?? '';
+  let comparison = cache.comparisons.get(id);
+  if (!comparison) {
+    comparison = compareRollWidthsOrEmpty(project, productId);
+    cache.comparisons.set(id, comparison);
+  }
+  return comparison;
 }

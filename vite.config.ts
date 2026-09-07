@@ -2,11 +2,11 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
 
 /**
- * Stamp the built service worker with a build id.
+ * Stamp the built service worker with a build id and the complete generated asset list.
  *
  * `public/sw.js` is copied verbatim into dist, so without this its `CACHE_VERSION` would be the same
  * string for ever: `activate` would never delete the previous cache and an installed app could sit
@@ -22,8 +22,17 @@ function swBuildId(): Plugin {
       const sw = `${dist}/sw.js`;
       const html = `${dist}/index.html`;
       if (!existsSync(sw) || !existsSync(html)) return;
-      const id = createHash('sha256').update(readFileSync(html)).digest('hex').slice(0, 12);
-      writeFileSync(sw, readFileSync(sw, 'utf8').replace(/__BUILD_ID__/g, id));
+      const listAssets = (relative: string): string[] => readdirSync(`${dist}/${relative}`, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? listAssets(`${relative}/${entry.name}`) : [`./${relative}/${entry.name}`],
+      );
+      const assets = ['assets', 'ocr'].flatMap(directory => existsSync(`${dist}/${directory}`) ? listAssets(directory) : []).sort();
+      const hash = createHash('sha256').update(readFileSync(html)).update(JSON.stringify(assets));
+      // OCR uses fixed filenames: include their bytes so an OCR update changes the cache too.
+      assets.filter(path => path.startsWith('./ocr/')).forEach(path => hash.update(readFileSync(`${dist}/${path}`)));
+      const id = hash.digest('hex').slice(0, 12);
+      writeFileSync(sw, readFileSync(sw, 'utf8')
+        .replace(/__BUILD_ID__/g, id)
+        .replace('/* __PRECACHE_ASSETS__ */ []', JSON.stringify(assets)));
     },
   };
 }
@@ -48,6 +57,9 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    css: { include: [/client-pack\.css/] },
+    // Avoid saturating the workstation with many simultaneous jsdom + browser test processes.
+    maxWorkers: 2,
     // The engine is pure and runs in node; the UI and the store need a DOM. Expressed as projects
     // (the supported split since Vitest 3.2) rather than the deprecated `environmentMatchGlobs`,
     // which is removed in Vitest 4 — and would have silently run 200+ DOM tests in node.

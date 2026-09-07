@@ -2,7 +2,9 @@
  * Warning lists for the estimate: flat (compact panel) or grouped by level (full estimate page),
  * each item styled by level and prefixed with the room / staircase it concerns.
  */
+import { useEffect, useRef } from 'react';
 import type { Project, Warning } from '@engine/types';
+import { useProjectStore, type Selection } from '@store/projectStore';
 
 export type WarningLevel = Warning['level'];
 
@@ -39,7 +41,13 @@ export function sortWarnings(warnings: Warning[]): Warning[] {
 }
 
 export function WarningItem({ warning, project }: { warning: Warning; project: Project }) {
+  const select = useProjectStore((s) => s.select);
+  const setTab = useProjectStore((s) => s.setTab);
   const name = subjectName(project, warning.subjectId);
+  const id = warning.subjectId;
+  const target: Selection | undefined = id && project.rooms.some((room) => room.id === id) ? { kind: 'room', id }
+    : id && project.staircases.some((stairs) => stairs.id === id) ? { kind: 'staircase', id }
+    : id && project.products.some((product) => product.id === id) ? { kind: 'product', id } : undefined;
   // Engine messages usually start with the room name already ("Lounge: ..."); do not repeat it.
   const showName = name && !warning.message.startsWith(name);
   const cls = warning.level === 'warning' ? 'warning' : `warning ${warning.level}`;
@@ -47,6 +55,12 @@ export function WarningItem({ warning, project }: { warning: Warning; project: P
     <li className={cls} data-level={warning.level} data-code={warning.code}>
       {showName ? <strong className="warning-subject">{name}: </strong> : null}
       <span>{warning.message}</span>
+      {target ? (
+        <button type="button" className="link warning-action no-print" aria-label={`Review ${name}: ${warning.message}`} onClick={() => {
+          select(target);
+          setTab(target.kind === 'product' ? 'materials' : 'rooms');
+        }}>Review {name}</button>
+      ) : null}
     </li>
   );
 }
@@ -75,6 +89,7 @@ export function Warnings({ warnings, project, grouped, max, emptyText, onShowMor
         {LEVEL_ORDER.map((level) => {
           const items = all.filter((w) => w.level === level);
           if (items.length === 0) return null;
+          if (level === 'info') return <InformationNotes key={level} items={items} project={project} />;
           return (
             <div key={level} className="warnings-group">
               <h4>
@@ -111,5 +126,37 @@ export function Warnings({ warnings, project, grouped, max, emptyText, onShowMor
         )
       ) : null}
     </div>
+  );
+}
+
+/** Keep background assumptions available without pushing the actual plan below a wall of notes. */
+function InformationNotes({ items, project }: { items: Warning[]; project: Project }) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    let wasOpen: boolean | undefined;
+    const beforePrint = () => {
+      const details = detailsRef.current;
+      if (!details || wasOpen !== undefined) return;
+      wasOpen = details.open;
+      details.open = true;
+    };
+    const afterPrint = () => {
+      if (detailsRef.current && wasOpen !== undefined) detailsRef.current.open = wasOpen;
+      wasOpen = undefined;
+    };
+    window.addEventListener('beforeprint', beforePrint);
+    window.addEventListener('afterprint', afterPrint);
+    return () => {
+      window.removeEventListener('beforeprint', beforePrint);
+      window.removeEventListener('afterprint', afterPrint);
+    };
+  }, []);
+  return (
+    <details className="warnings-notes" ref={detailsRef}>
+      <summary><span>Notes</span> ({items.length}) <span className="muted small">— planning assumptions and advice</span></summary>
+      <ul className="warnings" aria-label="Notes">
+        {items.map((warning, index) => <WarningItem key={`${warning.code}-${warning.subjectId ?? ''}-${index}`} warning={warning} project={project} />)}
+      </ul>
+    </details>
   );
 }

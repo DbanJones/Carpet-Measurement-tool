@@ -10,6 +10,7 @@ import { useId } from 'react';
 import type { Landing, Mm, Staircase, Step } from '@engine/types';
 import { DEFAULT_BULLNOSE_PROJECTION, DEFAULT_CURTAIL_PROJECTION } from '@engine/stairs';
 import { formatLength } from '@ui/components/inputs';
+import { defaultStairLayout, stairPlanGeometry, STAIR_SHAPES } from './stairLayout';
 
 type Unit = 'metric' | 'imperial';
 
@@ -48,19 +49,40 @@ function Hatch({ id }: { id: string }) {
 export function StairsPreview({ staircase, unit }: { staircase: Staircase; unit: Unit }) {
   const rawId = useId();
   const hatchId = `stairs-hatch-${rawId.replace(/[^A-Za-z0-9_-]/g, '')}`;
+  const shaped = !!staircase.drawing || defaultStairLayout(staircase).kind !== 'straight';
   if (staircase.steps.length === 0) return <div className="empty small">Add a step to see the preview.</div>;
   return (
     <div className="stairs-preview">
       <figure className="stairs-figure stairs-figure-elevation">
         <Elevation staircase={staircase} unit={unit} hatchId={`${hatchId}-e`} />
-        <figcaption className="small muted">Side elevation, foot of the flight at the left</figcaption>
+        <figcaption className="small muted">Unfolded side elevation, foot of the flight at the left</figcaption>
       </figure>
       <figure className="stairs-figure stairs-figure-plan">
-        <Plan staircase={staircase} hatchId={`${hatchId}-p`} />
-        <figcaption className="small muted">Plan, bottom step at the bottom</figcaption>
+        {shaped ? <ShapedPlan staircase={staircase} hatchId={`${hatchId}-p`} /> : <Plan staircase={staircase} hatchId={`${hatchId}-p`} />}
+        <figcaption className="small muted">{shaped ? 'Plan shape with numbered treads and direction up. Schematic; cut sizes use your measured tread depths.' : 'Plan view, bottom step at the bottom.'}</figcaption>
       </figure>
     </div>
   );
+}
+
+function ShapedPlan({ staircase, hatchId }: { staircase: Staircase; hatchId: string }) {
+  const geometry = stairPlanGeometry(staircase);
+  const layout = defaultStairLayout(staircase);
+  const label = staircase.drawing ? 'Custom route' : STAIR_SHAPES.find((shape) => shape.value === layout.kind)?.label ?? 'Staircase';
+  const W = 290; const H = 290; const padding = 22;
+  const scale = Math.min((W - padding * 2) / geometry.width, (H - padding * 2) / geometry.height);
+  const x = (v: number) => (W - geometry.width * scale) / 2 + v * scale;
+  const y = (v: number) => H - (H - geometry.height * scale) / 2 - v * scale;
+  const end = geometry.route.at(-1);
+  return <svg className="diagram stairs-plan stairs-shaped-plan" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Plan view: ${staircase.steps.length} treads, ${label.toLowerCase()}, turning ${layout.direction}`}>
+    <defs><Hatch id={hatchId} /><marker id={`${hatchId}-arrow`} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#155e75" /></marker></defs>
+    {geometry.pieces.map((piece) => <g key={piece.id} data-stair-step={piece.stepIndex !== undefined ? piece.stepIndex + 1 : undefined}>
+      <polygon className={piece.kind === 'landing' ? 'stairs-landing' : piece.kind === 'winder' ? 'stairs-winder' : 'stairs-tread'} fill={piece.kind === 'winder' ? `url(#${hatchId})` : undefined} points={piece.points.map((p) => `${x(p.x)},${y(p.y)}`).join(' ')}><title>{piece.label}</title></polygon>
+      <text x={x(piece.points.reduce((s, p) => s + p.x, 0) / piece.points.length)} y={y(piece.points.reduce((s, p) => s + p.y, 0) / piece.points.length) + 3} textAnchor="middle" fontSize="9" paintOrder="stroke" stroke="white" strokeWidth="2">{piece.stepIndex !== undefined ? piece.stepIndex + 1 : 'Landing'}</text>
+    </g>)}
+    <polyline points={geometry.route.map((p) => `${x(p.x)},${y(p.y)}`).join(' ')} fill="none" stroke="#155e75" strokeWidth="1.5" strokeDasharray="4 3" markerEnd={`url(#${hatchId}-arrow)`} opacity=".75" />
+    {end ? <text x={x(end.x)} y={y(end.y) - 8} textAnchor="middle" fontSize="10" fill="#155e75">UP</text> : null}
+  </svg>;
 }
 
 // ---------------------------------------------------------------------------
@@ -282,7 +304,7 @@ function Plan({ staircase, hatchId }: { staircase: Staircase; hatchId: string })
   const lastIndex = staircase.steps.length - 1;
 
   return (
-    <svg className="diagram stairs-plan" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Plan view: ${staircase.steps.length} treads`}>
+    <svg className="diagram stairs-plan" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Plan view: ${staircase.steps.length} treads, unfolded schematic; turns shown straight`}>
       <defs>
         <Hatch id={hatchId} />
       </defs>

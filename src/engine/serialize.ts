@@ -26,6 +26,7 @@ import type {
   HardFloorOptions,
   Id,
   Landing,
+  LabourModel,
   Mm,
   M2,
   PackProduct,
@@ -43,6 +44,9 @@ import type {
   WallFeature,
 } from './types';
 import { isBroadloom } from './types';
+import { MAX_STAIR_DRAWING_POINTS, validateDrawing } from './stairDrawing';
+import { validStairOutlinePoints, validStepOutline } from './stairOutlines';
+import { DEFAULT_LABOUR_MODEL } from './labour';
 import {
   CARPET_ROLL_WIDTHS,
   CARPET_TILES_PER_BOX,
@@ -447,6 +451,7 @@ function pickPartial<T extends object>(raw: unknown, specs: Record<string, Field
 }
 
 const BROADLOOM_SPECS: Record<string, FieldSpec> = {
+  wastageAllowance: { kind: 'number', spec: { min: 0, max: 5 } },
   pileDirection: { kind: 'enum', values: PILE_DIRECTIONS },
   seamPolicy: { kind: 'enum', values: SEAM_POLICIES },
   lengthAllowance: { kind: 'number', spec: NON_NEGATIVE },
@@ -539,9 +544,24 @@ function repairPrices(raw: unknown, log: WarningLog): PriceBook {
   );
   return {
     ...head,
+    ...(src?.labourModel !== undefined ? { labourModel: repairLabourModel(src.labourModel, log) } : {}),
     labour: mergeGroup({ ...DEFAULT_PRICES.labour }, src?.labour, numericSpecs(DEFAULT_PRICES.labour), 'prices.labour', log),
     materials: mergeGroup({ ...DEFAULT_PRICES.materials }, src?.materials, numericSpecs(DEFAULT_PRICES.materials), 'prices.materials', log),
   };
+}
+
+function repairLabourModel(raw: unknown, log: WarningLog): LabourModel {
+  const d = DEFAULT_LABOUR_MODEL;
+  const src = isRecord(raw) ? raw : {};
+  const basic = mergeGroup({ mode: d.mode, hourlyRate: d.hourlyRate, setupHours: d.setupHours, allowance: d.allowance, patternMultiplier: d.patternMultiplier,
+    straightStepMinutes: d.straightStepMinutes, shapedStepMinutes: d.shapedStepMinutes, landingM2PerHour: d.landingM2PerHour }, raw, {
+      mode: { kind: 'enum', values: ['unit_rates', 'hourly'] }, hourlyRate: { kind: 'number', spec: NON_NEGATIVE }, setupHours: { kind: 'number', spec: NON_NEGATIVE },
+      allowance: { kind: 'number', spec: { min: 0, max: 5 } }, patternMultiplier: { kind: 'number', spec: POSITIVE }, straightStepMinutes: { kind: 'number', spec: NON_NEGATIVE },
+      shapedStepMinutes: { kind: 'number', spec: NON_NEGATIVE }, landingM2PerHour: { kind: 'number', spec: POSITIVE },
+    }, 'prices.labourModel', log);
+  const fittingSpecs = Object.fromEntries(Object.keys(d.fittingM2PerHour).map(k => [k, { kind: 'number', spec: POSITIVE }])) as Record<string, FieldSpec>;
+  return { ...basic, fittingM2PerHour: mergeGroup({ ...d.fittingM2PerHour }, src.fittingM2PerHour, fittingSpecs, 'prices.labourModel.fittingM2PerHour', log),
+    activityMinutes: mergeGroup({ ...d.activityMinutes }, src.activityMinutes, numericSpecs(d.activityMinutes), 'prices.labourModel.activityMinutes', log) };
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +658,12 @@ function repairProducts(raw: unknown, log: WarningLog): ProductsResult {
       setIf(product, 'patternRepeatWidth', optionalNumber(e.patternRepeatWidth, NON_NEGATIVE, `${label}: the pattern repeat across the roll`, log));
       setIf(product, 'thickness', optionalNumber(e.thickness, NON_NEGATIVE, `${label}: the thickness`, log));
       setIf(product, 'pricePerM2', optionalNumber(e.pricePerM2, NON_NEGATIVE, `${label}: the price per m²`, log));
+      Object.assign(product, pickPartial<BroadloomProduct>(e, {
+        priceBasis: { kind: 'enum', values: ['per_m2', 'per_roll'] }, pricePerRoll: { kind: 'number', spec: NON_NEGATIVE },
+        pricedRollLength: { kind: 'number', spec: POSITIVE }, rollPricing: { kind: 'enum', values: ['whole_rolls', 'cut_length'] },
+        wastageAllowance: { kind: 'number', spec: { min: 0, max: 5 } },
+      }, `${label}: pricing and waste`, log));
+      if (kind === 'carpet') setIf(product, 'underlay', pickPartial<UnderlayOptions>(e.underlay, UNDERLAY_SPECS, `${label}: underlay`, log));
       products.push(product);
       return;
     }
@@ -653,6 +679,8 @@ function repairProducts(raw: unknown, log: WarningLog): ProductsResult {
     setIf(product, 'thickness', optionalNumber(e.thickness, NON_NEGATIVE, `${label}: the thickness`, log));
     setIf(product, 'pricePerPack', optionalNumber(e.pricePerPack, NON_NEGATIVE, `${label}: the price per pack`, log));
     setIf(product, 'pricePerM2', optionalNumber(e.pricePerM2, NON_NEGATIVE, `${label}: the price per m²`, log));
+    Object.assign(product, pickPartial<PackProduct>(e, { priceBasis: { kind: 'enum', values: ['per_pack', 'per_m2'] } }, `${label}: pricing`, log));
+    setIf(product, 'hardFloor', pickPartial<HardFloorOptions>(e.hardFloor, HARD_FLOOR_SPECS, `${label}: laying pattern and waste`, log));
     products.push(product);
   });
 
@@ -882,6 +910,16 @@ function repairSteps(raw: unknown, what: string, log: WarningLog): Step[] {
     setIf(step, 'goingNarrow', optionalNumber(e.goingNarrow, NON_NEGATIVE, `${label}: the narrow going`, log));
     setIf(step, 'bullnoseProjection', optionalNumber(e.bullnoseProjection, NON_NEGATIVE, `${label}: the bullnose projection`, log));
     setIf(step, 'bullnoseSides', optionalEnum(e.bullnoseSides, BULLNOSE_SIDES, `${label}: the bullnose sides`, log));
+    if (e.plan !== undefined) {
+      if (isRecord(e.plan) && [e.plan.x, e.plan.y, e.plan.heading].every(value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1e6)
+        && (e.plan.turn === undefined || typeof e.plan.turn === 'number' && Number.isFinite(e.plan.turn) && Math.abs(e.plan.turn) <= 180)) {
+        step.plan = { x: e.plan.x as number, y: e.plan.y as number, heading: e.plan.heading as number, ...(e.plan.turn !== undefined ? { turn: e.plan.turn as number } : {}) };
+      } else log.add(`${label}: the individual plan position was invalid and was removed; measured dimensions were kept.`);
+    }
+    if (e.outline !== undefined) {
+      if (step.plan && validStepOutline(e.outline)) step.outline = { points: e.outline.points.map(point => ({ ...point })), entry: [...e.outline.entry], exit: [...e.outline.exit], ...(e.outline.corners ? { corners: [...e.outline.corners] } : {}) };
+      else log.add(`${label}: the custom tread shape was invalid and was removed; measured dimensions were kept.`);
+    }
     return step;
   });
 }
@@ -892,12 +930,15 @@ function repairLandings(raw: unknown, what: string, log: WarningLog): Landing[] 
   const ids = assignIds(entries, 'landing', `${what}: landing`, space, log);
   return entries.map((e, i) => {
     const label = `${what}: landing ${i + 1}`;
+    if (e.outline !== undefined && !validStairOutlinePoints(e.outline)) log.add(`${label}: the custom landing shape was invalid and was removed; measured dimensions were kept.`);
     return {
       id: ids[i] ?? `landing-${i + 1}`,
       kind: enumOr(e.kind, LANDING_KINDS, 'quarter', `${label}: the kind`, log),
       length: numberOr(e.length, POSITIVE, FALLBACK_ROOM_WIDTH, `${label}: the length`, log),
       width: numberOr(e.width, POSITIVE, DEFAULT_STEP.width, `${label}: the width`, log),
-      afterStepIndex: numberOr(e.afterStepIndex, NON_NEGATIVE_INT, 0, `${label}: its place in the flight`, log),
+      afterStepIndex: numberOr(e.afterStepIndex, { min: -1, integer: true }, 0, `${label}: its place in the flight`, log),
+      ...(validStairOutlinePoints(e.outline) ? { outline: e.outline.map(point => ({ ...point })),
+        ...(Array.isArray(e.outlineExit) && e.outlineExit.length === 2 && e.outlineExit[0] !== e.outlineExit[1] && e.outlineExit.every(index => Number.isInteger(index) && index >= 0 && index < (e.outline as Point[]).length) ? { outlineExit: e.outlineExit as [number, number] } : {}) } : {}),
     };
   });
 }
@@ -931,6 +972,29 @@ function repairStaircases(raw: unknown, ctx: RefCtx): Staircase[] {
     setIf(staircase, 'underlayRisers', optionalBoolean(e.underlayRisers, `${what}: the "underlay the risers too" flag`, ctx.log));
     if (e.subfloor !== undefined && e.subfloor !== null) staircase.subfloor = repairSubfloor(e.subfloor, what, ctx.log);
     setIf(staircase, 'notes', optionalString(e.notes, `${what}: the notes`, ctx.log));
+    setIf(staircase, 'source', repairSource(e.source, what, ctx));
+    if (isRecord(e.layout)) {
+      staircase.layout = {
+        kind: enumOr(e.layout.kind, ['straight', 'quarter_turn', 'half_turn', 'curved'] as const, 'straight', `${what}: the plan shape`, ctx.log),
+        direction: enumOr(e.layout.direction, ['left', 'right'] as const, 'right', `${what}: the turn direction`, ctx.log),
+        turnStartIndex: Math.min(Math.max(0, staircase.steps.length - 1), numberOr(e.layout.turnStartIndex, NON_NEGATIVE_INT, 0, `${what}: the turn position`, ctx.log)),
+        turnSteps: Math.min(staircase.steps.length, numberOr(e.layout.turnSteps, NON_NEGATIVE_INT, 0, `${what}: the turning treads`, ctx.log)),
+      };
+      const angle = optionalNumber(e.layout.curveAngle, POSITIVE, `${what}: the curve angle`, ctx.log);
+      if (angle !== undefined) staircase.layout.curveAngle = Math.min(330, Math.max(15, angle));
+      setIf(staircase.layout, 'innerRadius', optionalNumber(e.layout.innerRadius, NON_NEGATIVE, `${what}: the inner radius`, ctx.log));
+    } else if (e.layout !== undefined && e.layout !== null) {
+      ctx.log.add(`${what}: the plan layout was invalid; the measured steps were kept.`);
+    }
+    if (e.drawing !== undefined && e.drawing !== null) {
+      if (isRecord(e.drawing) && Array.isArray(e.drawing.points) && e.drawing.points.length >= 2 && e.drawing.points.length <= MAX_STAIR_DRAWING_POINTS
+        && e.drawing.points.every((point) => isRecord(point) && typeof point.x === 'number' && Number.isFinite(point.x) && typeof point.y === 'number' && Number.isFinite(point.y))) {
+        const points = e.drawing.points.map((point: Record<string, unknown>) => ({ x: point.x as number, y: point.y as number, ...(point.curve === true ? { curve: true } : point.curve === false ? { curve: false } : {}) }));
+        const issue = validateDrawing(points);
+        if (issue) ctx.log.add(`${what}: the direction drawing was left out. ${issue} Measured steps were kept.`);
+        else staircase.drawing = { points };
+      } else ctx.log.add(`${what}: the direction drawing needs 2–${MAX_STAIR_DRAWING_POINTS} finite points; it was left out and measured steps were kept.`);
+    }
     return staircase;
   });
 }
@@ -964,6 +1028,9 @@ function repairFloorPlans(raw: unknown, log: WarningLog): { plans: FloorPlanDocu
       heightPx: numberOr(e.heightPx, POSITIVE, FALLBACK_PLAN_PIXELS, `${what}: the image height`, log),
     };
     setIf(plan, 'mmPerPx', optionalNumber(e.mmPerPx, POSITIVE, `${what}: the scale`, log));
+    if (isRecord(e.sketch) && finiteNumber(e.sketch.gridMm, POSITIVE) !== undefined && plan.mmPerPx) {
+      plan.sketch = { gridMm: e.sketch.gridMm as number };
+    }
     if (isRecord(e.calibration)) {
       const a = isRecord(e.calibration.a) ? e.calibration.a : undefined;
       const b = isRecord(e.calibration.b) ? e.calibration.b : undefined;
@@ -979,6 +1046,13 @@ function repairFloorPlans(raw: unknown, log: WarningLog): { plans: FloorPlanDocu
       }
     } else if (e.calibration !== undefined && e.calibration !== null) {
       log.add(`${what}: the scale calibration is ${show(e.calibration)}; it was left out.`);
+    }
+    if (isRecord(e.reading) && (e.reading.source === 'ocr' || e.reading.source === 'pdf') && typeof e.reading.text === 'string' && Array.isArray(e.reading.lines)) {
+      const lines = e.reading.lines.slice(0, 2000).filter(isRecord).flatMap((line) => {
+        if (typeof line.text !== 'string' || !['x', 'y', 'width', 'height', 'confidence'].every((field) => typeof line[field] === 'number' && Number.isFinite(line[field]))) return [];
+        return [{ text: line.text.slice(0, 500), x: Math.max(0, Number(line.x)), y: Math.max(0, Number(line.y)), width: Math.max(0, Number(line.width)), height: Math.max(0, Number(line.height)), confidence: Math.min(100, Math.max(0, Number(line.confidence))), ...(line.reviewed === true ? { reviewed: true } : {}) }];
+      });
+      plan.reading = { text: e.reading.text.slice(0, 50000), lines, source: e.reading.source };
     }
     plans.push(plan);
   });
@@ -1036,6 +1110,12 @@ function repairProject(body: Record<string, unknown>, log: WarningLog): Project 
   setIf(project, 'quoteDate', optionalString(body.quoteDate, 'The quote date', log));
   setIf(project, 'validFor', optionalString(body.validFor, 'How long the quote is valid', log));
   setIf(project, 'notes', optionalString(body.notes, 'The project notes', log));
+  if (isRecord(body.business)) {
+    project.business = {};
+    for (const field of ['name', 'email', 'phone', 'address', 'website', 'terms'] as const) {
+      setIf(project.business, field, optionalString(body.business[field], `Business ${field}`, log));
+    }
+  }
   return project;
 }
 

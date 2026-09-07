@@ -5,11 +5,28 @@
  */
 import { create } from 'zustand';
 import type { Project, Room, Staircase, Product, FloorPlanDocument, Doorway, Step, PriceBook } from '@engine/types';
-import { parseProject } from '@engine/serialize';
+import { parseProject, PROJECT_SCHEMA_VERSION } from '@engine/serialize';
 import { DEFAULT_BROADLOOM_OPTIONS, DEFAULT_HARD_FLOOR, DEFAULT_UNDERLAY, DEFAULT_ACCESSORIES, DEFAULT_FLOOR_PREP, DEFAULT_PRICES, DEFAULT_STEP, CARPET_MAX_ROLL_LENGTH, CUT_INCREMENT, DEFAULT_CARPET_THICKNESS, DEFAULT_DOOR_WIDTH } from '@engine/defaults';
 import { newId } from './ids';
 
 export const STORAGE_KEY = 'flooring-estimator:project:v1';
+
+/** Browser storage can be full or disabled; a failed write must never look like a saved project. */
+export interface PersistenceState {
+  status: 'unsaved' | 'saved' | 'error';
+  savedAt: string | null;
+  message: string | null;
+  restoreWarnings: string[];
+  dismissRestoreWarnings: () => void;
+}
+
+export const usePersistenceStore = create<PersistenceState>((set) => ({
+  status: 'unsaved',
+  savedAt: null,
+  message: null,
+  restoreWarnings: [],
+  dismissRestoreWarnings: () => set({ restoreWarnings: [] }),
+}));
 
 /** Omit that distributes over a union (plain Omit collapses `Product` to its common keys). */
 export type DistributiveOmit<T, K extends keyof any> = T extends unknown ? Omit<T, K> : never;
@@ -21,12 +38,15 @@ export type Selection =
   | { kind: 'product'; id: string }
   | { kind: 'floorplan'; id: string };
 
-export type Tab = 'rooms' | 'floorplan' | 'materials' | 'results';
+export type Tab = 'rooms' | 'floorplan' | 'materials' | 'results' | 'settings';
 
 export interface ProjectState {
   project: Project;
   selection: Selection;
   tab: Tab;
+  /** Current-session choice for newly measured spaces; never changes existing assignments. */
+  newSpaceProductId: string | null;
+  setNewSpaceProduct: (id: string) => void;
   /** Bumped on every project mutation, handy for memoisation. */
   revision: number;
 
@@ -36,17 +56,20 @@ export interface ProjectState {
   setTab: (tab: Tab) => void;
   select: (s: Selection) => void;
   resetProject: () => void;
+  retrySave: () => void;
 
   // products
   addProduct: (p: DistributiveOmit<Product, 'id'> & { id?: string }) => string;
   updateProduct: (id: string, patch: Partial<Product>) => void;
   removeProduct: (id: string) => void;
+  reorderProduct: (id: string, toIndex: number) => void;
 
   // rooms
   addRoom: (partial?: Partial<Room>) => string;
   updateRoom: (id: string, patch: Partial<Room> | ((r: Room) => Room)) => void;
   duplicateRoom: (id: string) => string | null;
   removeRoom: (id: string) => void;
+  reorderRoom: (id: string, toIndex: number) => void;
   addDoorway: (roomId: string, d?: Partial<Doorway>) => string;
   updateDoorway: (roomId: string, doorwayId: string, patch: Partial<Doorway>) => void;
   removeDoorway: (roomId: string, doorwayId: string) => void;
@@ -54,11 +77,14 @@ export interface ProjectState {
   // staircases
   addStaircase: (partial?: Partial<Staircase>) => string;
   updateStaircase: (id: string, patch: Partial<Staircase> | ((s: Staircase) => Staircase)) => void;
+  duplicateStaircase: (id: string) => string | null;
   removeStaircase: (id: string) => void;
+  reorderStaircase: (id: string, toIndex: number) => void;
 
   // floor plans
   addFloorPlan: (doc: Omit<FloorPlanDocument, 'id'> & { id?: string }) => string;
   updateFloorPlan: (id: string, patch: Partial<FloorPlanDocument>) => void;
+  reorderFloorPlan: (id: string, toIndex: number) => void;
   removeFloorPlan: (id: string) => void;
 
   // options & prices
@@ -115,20 +141,45 @@ function loadPersisted(): Project | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { project?: unknown };
-    if (parsed.project === undefined || parsed.project === null) return null;
-    const res = parseProject(JSON.stringify(parsed.project));
-    return 'error' in res ? null : res.project;
-  } catch {
+    const parsed = JSON.parse(raw) as { project?: unknown; savedAt?: unknown; schemaVersion?: unknown } | null;
+    if (!parsed || parsed.project === undefined || parsed.project === null) throw new Error('No project was found in the browser save.');
+    // The v1 browser key originally stored { project, savedAt } without an explicit version.
+    // Preserve newer envelopes and their validation, supplying v1 only for that known legacy form.
+    const envelope = parsed.schemaVersion === undefined ? { ...parsed, schemaVersion: 1 } : parsed;
+    const res = parseProject(JSON.stringify(envelope));
+    if ('error' in res) throw new Error(res.error);
+    usePersistenceStore.setState({
+      status: res.warnings.length > 0 ? 'unsaved' : 'saved',
+      savedAt: typeof parsed.savedAt === 'string' && Number.isFinite(Date.parse(parsed.savedAt)) ? parsed.savedAt : null,
+      restoreWarnings: res.warnings,
+    });
+    return res.project;
+  } catch (error) {
+    const unavailable = error instanceof DOMException && error.name === 'SecurityError';
+    usePersistenceStore.setState({
+      status: 'error',
+      message: unavailable
+        ? 'Browser saving is unavailable. Use Save file to keep your work.'
+        : 'The previous browser save could not be restored. Load a saved project file to recover your work.',
+      restoreWarnings: unavailable ? [] : ['The previous browser save could not be restored. A new project has been opened.'],
+    });
     return null;
   }
 }
 
 function persist(project: Project) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ project, savedAt: new Date().toISOString() }));
-  } catch {
-    /* storage unavailable (private mode, quota) — the app still works */
+    const savedAt = new Date().toISOString();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ schemaVersion: PROJECT_SCHEMA_VERSION, project, savedAt }));
+    usePersistenceStore.setState({ status: 'saved', savedAt, message: null });
+  } catch (error) {
+    const full = error instanceof DOMException && (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED');
+    usePersistenceStore.setState({
+      status: 'error',
+      message: full
+        ? 'Browser storage is full. Your latest changes are only open in this tab. Use Save file to keep them.'
+        : 'Browser saving failed. Your latest changes are only open in this tab. Use Save file to keep them.',
+    });
   }
 }
 
@@ -140,24 +191,44 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       return { project, revision: state.revision + 1 };
     });
 
+  // Reorder the stored entities themselves, so navigation, exports and the next visit agree.
+  const reorder = (key: 'rooms' | 'staircases' | 'products' | 'floorPlans', id: string, toIndex: number) => {
+    const items = get().project[key];
+    const from = items.findIndex(item => item.id === id);
+    if (from < 0 || !Number.isFinite(toIndex)) return;
+    const target = Math.max(0, Math.min(items.length - 1, Math.trunc(toIndex)));
+    if (from === target) return;
+    mutate(project => {
+      const next = [...project[key]];
+      const [item] = next.splice(from, 1);
+      next.splice(target, 0, item!);
+      return { ...project, [key]: next };
+    });
+  };
+
   return {
     project: loadPersisted() ?? makeEmptyProject(),
     selection: { kind: 'none' },
     tab: 'rooms',
+    newSpaceProductId: null,
+    setNewSpaceProduct: (id) => { if (get().project.products.some((p) => p.id === id)) set({ newSpaceProductId: id }); },
     revision: 0,
 
     setProject: (p) => {
+      usePersistenceStore.setState({ restoreWarnings: [] });
       persist(p);
-      set((s) => ({ project: p, selection: { kind: 'none' }, revision: s.revision + 1 }));
+      set((s) => ({ project: p, selection: { kind: 'none' }, newSpaceProductId: null, revision: s.revision + 1 }));
     },
     updateProject: (patch) => mutate((p) => ({ ...p, ...patch })),
     setTab: (tab) => set({ tab }),
     select: (selection) => set({ selection }),
     resetProject: () => {
       const p = makeEmptyProject();
+      usePersistenceStore.setState({ restoreWarnings: [] });
       persist(p);
-      set((s) => ({ project: p, selection: { kind: 'none' }, tab: 'rooms', revision: s.revision + 1 }));
+      set((s) => ({ project: p, selection: { kind: 'none' }, tab: 'rooms', newSpaceProductId: null, revision: s.revision + 1 }));
     },
+    retrySave: () => persist(get().project),
 
     addProduct: (p) => {
       const id = p.id ?? newId('prod');
@@ -166,7 +237,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     },
     updateProduct: (id, patch) =>
       mutate((proj) => ({ ...proj, products: proj.products.map((p) => (p.id === id ? ({ ...p, ...patch } as Product) : p)) })),
-    removeProduct: (id) =>
+    reorderProduct: (id, toIndex) => reorder('products', id, toIndex),
+    removeProduct: (id) => {
       mutate((proj) => {
         const remaining = proj.products.filter((p) => p.id !== id);
         const fallback = remaining[0]?.id ?? '';
@@ -176,7 +248,11 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           rooms: proj.rooms.map((r) => (r.productId === id ? { ...r, productId: fallback } : r)),
           staircases: proj.staircases.map((s) => (s.productId === id ? { ...s, productId: fallback } : s)),
         };
-      }),
+      });
+      const state = get();
+      if (state.selection.kind === 'product' && state.selection.id === id) set({ selection: { kind: 'none' } });
+      if (state.newSpaceProductId === id) set({ newSpaceProductId: null });
+    },
 
     addRoom: (partial) => {
       const id = partial?.id ?? newId('room');
@@ -189,7 +265,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         // a doorway called "Door" is normal, and pairing the two sides of one opening is done with
         // `sharedOpeningId` in the doorway editor.
         doorways: partial?.doorways ?? [{ id: newId('door'), edgeIndex: 0, offset: 100, width: DEFAULT_DOOR_WIDTH, transition: 'carpet', label: `${partial?.name ?? `Room ${state.project.rooms.length + 1}`} door` }],
-        productId: partial?.productId ?? state.project.products[0]?.id ?? '',
+        productId: partial?.productId ?? state.project.products.find((p) => p.id === state.newSpaceProductId)?.id ?? state.project.products[0]?.id ?? '',
         subfloor: partial?.subfloor ?? { type: 'floorboards', condition: 'good', existingCovering: 'carpet', existingGripper: true },
         ...(partial?.planning ? { planning: partial.planning } : {}),
         ...(partial?.hardFloor ? { hardFloor: partial.hardFloor } : {}),
@@ -211,6 +287,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const copy: Room = structuredClone(src);
       copy.id = newId('room');
       copy.name = `${src.name} (copy)`;
+      // The copy retains its measurements, but is a new room with no position on the source plan.
+      delete copy.source;
       // A copy is a DIFFERENT room: its doorways are new openings, so the link to whatever the
       // original was paired with must not come with them or the copy's bars would be dropped.
       copy.doorways = copy.doorways.map((d) => {
@@ -221,6 +299,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       set({ selection: { kind: 'room', id: copy.id } });
       return copy.id;
     },
+    reorderRoom: (id, toIndex) => reorder('rooms', id, toIndex),
     removeRoom: (id) => {
       mutate((proj) => ({ ...proj, rooms: proj.rooms.filter((r) => r.id !== id) }));
       const sel = get().selection;
@@ -260,12 +339,17 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const stairs: Staircase = {
         id,
         name: partial?.name ?? 'Stairs',
-        productId: partial?.productId ?? state.project.products.find((p) => p.kind === 'carpet')?.id ?? state.project.products[0]?.id ?? '',
+        productId: partial?.productId ?? state.project.products.find((p) => p.id === state.newSpaceProductId)?.id ?? state.project.products.find((p) => p.kind === 'carpet')?.id ?? state.project.products[0]?.id ?? '',
         steps: partial?.steps ?? makeSteps(13),
         landings: partial?.landings ?? [],
         method: partial?.method ?? 'cap_and_band',
         openSides: partial?.openSides ?? 'none',
         nosingOverhang: partial?.nosingOverhang ?? 20,
+        ...(partial?.layout ? { layout: partial.layout } : {}),
+        ...(partial?.drawing ? { drawing: structuredClone(partial.drawing) } : {}),
+        ...(partial?.source ? { source: partial.source } : {}),
+        ...(partial?.underlayRisers !== undefined ? { underlayRisers: partial.underlayRisers } : {}),
+        ...(partial?.topRiserByLanding !== undefined ? { topRiserByLanding: partial.topRiserByLanding } : {}),
         ...(partial?.runner ? { runner: partial.runner } : {}),
         ...(partial?.subfloor ? { subfloor: partial.subfloor } : {}),
         ...(partial?.notes ? { notes: partial.notes } : {}),
@@ -279,6 +363,21 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         ...proj,
         staircases: proj.staircases.map((s) => (s.id === id ? (typeof patch === 'function' ? patch(s) : { ...s, ...patch }) : s)),
       })),
+    duplicateStaircase: (id) => {
+      const src = get().project.staircases.find((s) => s.id === id);
+      if (!src) return null;
+      const copy = structuredClone(src);
+      copy.id = newId('stairs');
+      copy.name = `${src.name} (copy)`;
+      copy.steps = copy.steps.map((step) => ({ ...step, id: newId('step') }));
+      copy.landings = copy.landings.map((landing) => ({ ...landing, id: newId('landing') }));
+      // The new flight has not been positioned on a floor plan yet.
+      delete copy.source;
+      mutate((proj) => ({ ...proj, staircases: [...proj.staircases, copy] }));
+      set({ selection: { kind: 'staircase', id: copy.id } });
+      return copy.id;
+    },
+    reorderStaircase: (id, toIndex) => reorder('staircases', id, toIndex),
     removeStaircase: (id) => {
       mutate((proj) => ({ ...proj, staircases: proj.staircases.filter((s) => s.id !== id) }));
       const sel = get().selection;
@@ -293,7 +392,18 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     },
     updateFloorPlan: (id, patch) =>
       mutate((proj) => ({ ...proj, floorPlans: proj.floorPlans.map((f) => (f.id === id ? { ...f, ...patch } : f)) })),
-    removeFloorPlan: (id) => mutate((proj) => ({ ...proj, floorPlans: proj.floorPlans.filter((f) => f.id !== id) })),
+    reorderFloorPlan: (id, toIndex) => reorder('floorPlans', id, toIndex),
+    removeFloorPlan: (id) => {
+      // Retain measured spaces, but remove references to the deleted drawing.
+      mutate((proj) => ({
+        ...proj,
+        floorPlans: proj.floorPlans.filter((f) => f.id !== id),
+        rooms: proj.rooms.map(room => room.source?.floorPlanId === id ? { ...room, source: undefined } : room),
+        staircases: proj.staircases.map(stairs => stairs.source?.floorPlanId === id ? { ...stairs, source: undefined } : stairs),
+      }));
+      const selection = get().selection;
+      if (selection.kind === 'floorplan' && selection.id === id) set({ selection: { kind: 'none' } });
+    },
 
     updateOptions: (patch) => mutate((proj) => ({ ...proj, options: { ...proj.options, ...patch } })),
     updatePrices: (patch) =>

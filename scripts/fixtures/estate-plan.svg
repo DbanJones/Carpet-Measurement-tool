@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="700" viewBox="0 0 960 700">
+  <rect width="960" height="700" fill="white"/>
+  <g fill="none" stroke="#202020" stroke-width="12" stroke-linecap="butt">
+    <rect x="80" y="80" width="720" height="480"/>
+    <path d="M440 80V300M440 380V560M80 340H210M270 340H440"/>
+  </g>
+  <g fill="none" stroke="#555" stroke-width="2">
+    <path d="M210 340V280A60 60 0 0 1 270 340M440 300H520A80 80 0 0 1 440 380"/>
+    <rect x="115" y="115" width="105" height="35" rx="4"/>
+    <rect x="116" y="400" width="110" height="100" rx="4"/>
+    <path d="M116 420H226M171 400V420M740 95V230H790"/>
+  </g>
+  <g font-family="Arial, sans-serif" fill="#333" text-anchor="middle">
+    <text x="275" y="190" font-size="23">Lounge</text>
+    <text x="275" y="217" font-size="16">4.35 m × 3.10 m</text>
+    <text x="320" y="435" font-size="23">Bedroom</text>
+    <text x="320" y="461" font-size="16">4.35 m × 2.60 m</text>
+    <text x="615" y="245" font-size="23">Kitchen / diner</text>
+    <text x="615" y="273" font-size="16">4.35 m × 5.85 m</text>
+    <text x="440" y="620" font-size="18">Ground floor · synthetic browser test fixture</text>
+  </g>
+</svg>

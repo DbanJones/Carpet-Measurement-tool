@@ -1,0 +1,65 @@
+.roll-destination-view { min-width: 0; }
+.roll-reading-guide { margin-bottom: .35rem; line-height: 1.6; }
+.physical-roll { min-width: 0; margin: 1rem 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: #fff; }
+.physical-roll-header { display: flex; justify-content: space-between; gap: 1rem; padding: .85rem 1rem; background: #f4f7f5; border-bottom: 1px solid var(--border); }
+.physical-roll-header h5 { margin: 0 0 .2rem; font-size: 1rem; }
+.physical-roll-order { display: grid; gap: .15rem; text-align: right; }
+.physical-roll-order span { font-size: .8rem; color: var(--muted); }
+.physical-roll > .warning { margin: .75rem; }
+.physical-roll .roll-cut-scroll { padding: .85rem .5rem .35rem; border-radius: 0; }
+.physical-roll .roll-cut-scroll:focus-visible { outline-offset: -3px; }
+.physical-roll .roll-cut-diagram { display: block; }
+.physical-roll .roll-axis text { fill: #526159; font-size: 11px; }
+.physical-roll .roll-direction-label { paint-order: stroke; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; }
+.physical-roll .cut-label { fill: #31473c; font-size: 11px; }
+.physical-roll .roll-piece { cursor: pointer; outline: none; transition: filter .15s; }
+/* Keep blanks opaque: transparency would expose the spare-material hatching underneath. */
+.physical-roll .roll-piece.is-dimmed { filter: grayscale(1); }
+.physical-roll .roll-piece:hover, .physical-roll .roll-piece:focus-visible { filter: none; }
+.physical-roll .roll-piece:focus-visible .destination-piece { stroke: #132f22 !important; stroke-width: 3px; stroke-dasharray: 4 2; }
+.physical-roll .destination-piece-label { fill: #20382b; font-size: 11px; }
+.roll-diagram-key { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem 1rem; padding: .4rem 1rem .7rem; }
+.roll-diagram-key > span { display: inline-flex; align-items: center; gap: .4rem; }
+.roll-hatch-swatch { display: inline-block; width: 1rem; height: 1rem; border: 1px solid #a0aaa4; background: repeating-linear-gradient(45deg, #f6f6f4, #f6f6f4 4px, #bcc4bf 4px, #bcc4bf 6px); }
+.roll-destination-heading { font-size: .85rem; margin: .55rem 1rem; }
+.roll-destinations { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: .5rem; padding: 0 1rem; }
+.roll-destination { display: flex; align-items: center; gap: .65rem; min-width: 0; min-height: 54px; padding: .55rem .65rem; text-align: left; background: #fff; }
+.roll-destination > span, .roll-piece-link > span { min-width: 0; display: grid; gap: .15rem; overflow-wrap: anywhere; }
+.roll-destination strong { font-size: .85rem; }
+.roll-destination small { font-size: .75rem; color: var(--muted); }
+.roll-destination.is-selected { border-color: #203c2f; box-shadow: inset 0 0 0 1px #203c2f; background: #f5f8f6; }
+.destination-swatch { display: inline-block; flex: 0 0 auto; width: .9rem; height: .9rem; border: 1px solid; border-radius: 3px; }
+.roll-selection { margin: .7rem 1rem; min-height: 3.1rem; padding: .6rem .7rem; display: grid; align-content: center; gap: .25rem; background: #f6f8f6; border-radius: 6px; font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }
+.roll-selection-actions { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: .15rem; }
+.roll-selection-actions button { min-height: 32px; }
+.roll-piece-details { border-top: 1px solid var(--border); }
+.roll-piece-details > summary { padding: .75rem 1rem; cursor: pointer; font-size: .85rem; font-weight: 600; }
+.roll-piece-details > .table-scroll { padding: 0 .75rem .75rem; }
+.roll-piece-details .cuts-table { margin: 0; }
+.roll-piece-details .cuts-table th small { display: block; font-weight: 400; color: var(--muted); margin-top: .25rem; white-space: nowrap; }
+.roll-piece-link { display: flex; align-items: center; gap: .5rem; min-height: 44px; width: 100%; border: 0; padding: .3rem; text-align: left; background: transparent; border-radius: 4px; }
+.roll-piece-link strong { font-size: .8rem; }
+.roll-piece-link small { font-size: .75rem; color: var(--muted); }
+.roll-piece-details tr.is-selected { background: #edf5f0; }
+.roll-piece-dimensions { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: .8rem; }
+.roll-order-summary { display: grid; gap: .3rem; padding: .6rem 0; font-size: .85rem; }
+.roll-order-summary > span { color: var(--muted); }
+.roll-waste-explainer { line-height: 1.6; }
+@media (max-width: 600px) {
+  .physical-roll-header { padding: .75rem; }
+  .physical-roll-order strong { font-size: .9rem; }
+  .roll-destinations { grid-template-columns: 1fr; padding: 0 .75rem; }
+  .roll-selection { margin: .7rem .75rem; }
+  .roll-piece-details .cuts-table th, .roll-piece-details .cuts-table td { padding: .35rem; }
+}
+@media print {
+  .physical-roll { break-inside: avoid; border-color: #999; overflow: visible; }
+  .physical-roll .roll-piece.is-dimmed { filter: none; }
+  .physical-roll .destination-piece { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .roll-destinations { grid-template-columns: repeat(3, 1fr); }
+  .roll-destination, .roll-piece-link { color: #000; }
+  .roll-selection { display: none; }
+  .roll-piece-details::details-content { content-visibility: visible; }
+  .roll-piece-details:not([open]) > :not(summary) { display: block; }
+  .roll-piece-details > summary { list-style: none; }
+}

@@ -1,0 +1,80 @@
+import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
+import { chromium } from 'playwright';
+
+const out = 'test-results/guided-house';
+await mkdir(out, { recursive: true });
+const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH ?? ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync) });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+const errors = [];
+page.on('pageerror', error => errors.push(error.message));
+const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('flooring-estimator:project:v1')).project);
+const click = name => page.getByRole('button', { name, exact: typeof name === 'string' }).click();
+const commit = async (name, value) => { const input = page.getByLabel(name, { exact: true }); await input.fill(value); await input.press('Tab'); };
+const planTap = async (x, y) => {
+  const canvas = page.getByTestId('floorplan-overlay'); await canvas.scrollIntoViewIfNeeded();
+  const box = await canvas.boundingBox();
+  await page.mouse.click(box.x + x / 1000 * box.width, box.y + y / 800 * box.height);
+};
+try {
+  await page.goto(process.env.BASE_URL ?? 'http://127.0.0.1:5173/');
+  await click('Guide me through setup');
+  await commit('Guide product name', 'House carpet'); await commit('Guide roll width', '5m');
+  await click('Use this flooring');
+  await page.locator('.guided-setup').screenshot({ path: `${out}/choose-start.png` });
+  await click(/Draw a house without a plan/);
+  assert.equal(await page.getByRole('button', { name: 'Detect room', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: 'Rectangle', exact: true }).getAttribute('aria-pressed'), 'true');
+  await page.waitForFunction(() => [...document.images].some(image => image.src.startsWith('data:image/svg+xml') && image.complete && image.naturalWidth === 1000));
+  await planTap(50, 50); await planTap(250, 200);
+  await commit('Sketch room length', '5m'); await commit('Sketch room width', '3m');
+  await commit('Room name', 'Lounge'); await click('Add room');
+  let project = await saved();
+  assert.equal(project.rooms.length, 1); assert.equal(project.rooms[0].shape.points[1].x, 5000);
+  const planId = project.floorPlans[0].id;
+  assert.deepEqual(project.floorPlans[0].sketch, { gridMm: 1000 });
+  await planTap(300, 50); await planTap(450, 200);
+  await commit('Room name', 'Hall'); await click('Add room');
+  assert.equal((await saved()).rooms.length, 2);
+  await page.locator('.fp-studio').screenshot({ path: `${out}/house-sketch.png` });
+
+  await click('Back to guide');
+  await click(/Lounge Check room measurements/);
+  const corner = page.getByRole('button', { name: 'Edit corner 1', exact: true });
+  await corner.focus(); await corner.press('Enter'); await corner.press('ArrowRight');
+  project = await saved();
+  assert.equal(project.rooms[0].source.floorPlanId, planId);
+  assert(project.rooms[0].source.pixelPolygon[0].x > 50, 'Editing a sketched room updates its house outline');
+  await click('Undo shape edit');
+  assert.equal((await saved()).rooms[0].source.pixelPolygon[0].x, 50);
+  await click('Back to guide');
+  await click('Add stairs'); await click('Guide me through stairs');
+  await commit('Guide riser count', '14'); await click(/L-shaped Quarter turn/); await click('Continue');
+  await click(/A flat landing/); await click(/Turn left/); await click('Continue');
+  await commit('Guide stair width', '0.9'); await commit('Guide step rise', '0.19');
+  await click('Continue');
+  await page.locator('.stair-setup').screenshot({ path: `${out}/stairs-preview.png` });
+  assert.equal((await saved()).staircases[0].steps.length, 13, 'Preview must not change the saved staircase');
+  await click('Apply this staircase');
+  project = await saved();
+  assert.equal(project.staircases[0].steps.length, 14); assert.equal(project.staircases[0].landings[0].kind, 'quarter');
+  assert(project.staircases[0].steps.every(step => step.rise === 190 && step.width === 900));
+  await click('Guide me through stairs');
+  for (const width of [1024, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), `Stair guide overflow at ${width}px`);
+  }
+  await page.locator('.stair-setup').screenshot({ path: `${out}/stairs-phone.png` });
+  await click('Cancel stair guide');
+  await click('Back to guide'); await click('Review my job');
+  await page.locator('.guided-setup').screenshot({ path: `${out}/review-phone.png` });
+  await click('Open estimate & client pack');
+  await page.reload();
+  project = await saved();
+  assert.equal(project.floorPlans[0].sketch.gridMm, 1000);
+  assert.equal(project.rooms[0].source.floorPlanId, planId);
+  assert.equal(project.staircases[0].steps.length, 14);
+  assert.deepEqual(errors, []);
+  console.log('Guided setup, blank house drawing, exact dimensions, linked room edits, staircase wizard and mobile layout passed.');
+} finally { await browser.close(); }

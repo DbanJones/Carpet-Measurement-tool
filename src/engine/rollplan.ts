@@ -7,7 +7,7 @@ import { planRoom, seamPenaltyMm2, type RoomPlan } from './broadloom';
 import { VINYL_ALLOWS_CROSS_JOINS } from './defaults';
 import { packOnRoll, splitIntoRolls, rejectWarning } from './packer';
 import { polygonAreaMm2 } from './geometry';
-import { mm2ToM2 } from './units';
+import { mm2ToM2, ceilToStep } from './units';
 
 export interface RollPlanRoom {
   roomId: Id;
@@ -143,14 +143,29 @@ export function buildRollPlan(input: RollPlanInput): RollPlan {
     }
   }
   const increment = input.product.cutIncrement ?? 100;
-  const { rolls, overlong } = splitIntoRolls(packed.cuts, input.product.maxRollLength, increment);
+  const pricedLength = input.product.priceBasis === 'per_roll' ? input.product.pricedRollLength : undefined;
+  const wholeRolls = input.product.priceBasis === 'per_roll' && input.product.rollPricing !== 'cut_length';
+  const maxLength = wholeRolls && pricedLength && pricedLength > 0 ? pricedLength : input.product.maxRollLength;
+  const { rolls, overlong } = splitIntoRolls(packed.cuts, maxLength, increment);
   for (const c of overlong) {
-    warnings.push({ level: 'error', code: 'CUT_TOO_LONG', message: `A cut of ${(c.length / 1000).toFixed(2)} m exceeds the maximum roll length of ${((input.product.maxRollLength ?? 0) / 1000).toFixed(1)} m; a cross seam will be needed.` });
+    warnings.push({ level: 'error', code: 'CUT_TOO_LONG', message: `A cut of ${(c.length / 1000).toFixed(2)} m exceeds the maximum roll length of ${((maxLength ?? 0) / 1000).toFixed(1)} m; a cross seam will be needed.` });
   }
   let orderLength = rolls.reduce((s, r) => s + r, 0);
   if (input.product.minCutLength && orderLength > 0 && orderLength < input.product.minCutLength) {
     warnings.push({ level: 'info', code: 'MIN_CUT', message: `Order rounded up to the supplier's minimum cut of ${(input.product.minCutLength / 1000).toFixed(1)} m.` });
     orderLength = input.product.minCutLength;
+  }
+  const wastage = input.product.wastageAllowance ?? input.options.wastageAllowance ?? 0;
+  const reserveLength = Number.isFinite(wastage) && wastage > 0 ? ceilToStep((netAreaMm2 * (1 + wastage)) / rollWidth, increment) : 0;
+  const addedReserve = reserveLength > orderLength;
+  if (reserveLength > orderLength) {
+    warnings.push({ level: 'info', code: 'WASTAGE_RESERVE', message: `${input.product.name}: minimum ${Math.round(wastage * 100)}% surplus over net area adds ${((reserveLength - orderLength) / 1000).toFixed(2)} m of uncut reserve; the layout's cutting waste is already credited.` });
+    orderLength = reserveLength;
+  }
+  const rollsRequired = (addedReserve || wholeRolls) && maxLength && maxLength > 0 ? Math.max(rolls.length, Math.ceil(orderLength / maxLength - 1e-9)) : rolls.length;
+  if (wholeRolls && pricedLength && pricedLength > 0 && orderLength > 0) {
+    orderLength = rollsRequired * pricedLength;
+    warnings.push({ level: 'info', code: 'WHOLE_ROLL_PURCHASE', message: `${input.product.name}: buying ${rollsRequired} whole roll${rollsRequired === 1 ? '' : 's'} of ${(pricedLength / 1000).toFixed(2)} m; all uncut material is included in the order and price.` });
   }
   const orderedAreaM2 = mm2ToM2(orderLength * rollWidth);
   const netAreaM2 = mm2ToM2(netAreaMm2);
@@ -163,7 +178,7 @@ export function buildRollPlan(input: RollPlanInput): RollPlan {
     pieces: finalPieces,
     cuts: packed.cuts,
     orderLength,
-    rollsRequired: rolls.length,
+    rollsRequired,
     orderedAreaM2,
     netAreaM2,
     wasteFraction,

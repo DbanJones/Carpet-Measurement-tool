@@ -81,6 +81,8 @@ import {
   GRIPPER_PER_STEP,
 } from './defaults';
 import { mm2ToM2, roundTo, ceilToStep, MM_PER_M } from './units';
+import { estimateLabourHours, type LabourHoursEstimate } from './labour';
+import { resolveProductUnderlay } from './productOptions';
 
 // ---------------------------------------------------------------------------
 // Local trade constants (candidates for defaults.ts)
@@ -187,6 +189,7 @@ const PREP_PRICED_AS_LABOUR: PrepItemKind[] = ['uplift', 'disposal', 'latex', 'p
 
 /** The specialist plans behind the BOM, for the UI's detail views. */
 export interface EstimateDetails {
+  labourHours: LabourHoursEstimate;
   stairPlans: Record<Id, StairPlan>;
   hardFloorPlans: Record<Id, HardFloorPlan>;
   underlay?: UnderlayPlan;
@@ -385,7 +388,7 @@ function prepare(project: Project): Prepared {
       fixingPerimeter: hasArea ? fixingPerimeter(polygon, doorways) : 0,
       bbox: { length: bb.length, width: bb.width },
       broadloom: mergeDefined(opts.broadloom, room.planning),
-      hardFloor: mergeDefined(opts.hardFloor, room.hardFloor),
+      hardFloor: mergeDefined(mergeDefined(opts.hardFloor, product && !isBroadloomProduct(product) ? product.hardFloor : undefined), room.hardFloor),
       planned: hasArea && product !== undefined,
     };
   });
@@ -396,7 +399,7 @@ function prepare(project: Project): Prepared {
       warnings.push({ level: 'error', code: 'MISSING_PRODUCT', message: `${staircase.name}: no product selected (or the product was deleted) — the staircase is not included in the quantities.`, subjectId: staircase.id });
       return { staircase, product: undefined, plan: undefined };
     }
-    const plan = planStaircase({ staircase, product, options: opts.broadloom, underlay: opts.underlay, accessories: opts.accessories });
+    const plan = planStaircase({ staircase, product, options: opts.broadloom, underlay: underlayFor(product, opts.underlay), accessories: opts.accessories });
     return { staircase, product, plan };
   });
 
@@ -426,6 +429,10 @@ function rollPlanInputFor(prep: Prepared, product: BroadloomProduct, base: Broad
 // ---------------------------------------------------------------------------
 
 const money = (v: number): number => roundTo(v, 2);
+
+function underlayFor(product: Product, defaults: UnderlayOptions): UnderlayOptions {
+  return resolveProductUnderlay(defaults, product.kind === 'carpet' ? product.underlay : undefined);
+}
 
 /** Whole units covering `value`; 0 when either side is not positive (never Infinity in a BOM). */
 function wholeUnits(value: number, unit: number): number {
@@ -531,6 +538,8 @@ interface LineSpec {
   notes?: string;
   /** Recommended / conditional work: priced but left out of the totals. */
   optional?: boolean;
+  /** No separate price is expected: the work is included elsewhere or carries no charge. */
+  informational?: boolean;
 }
 
 class Bom {
@@ -562,10 +571,12 @@ class Bom {
       subjectIds: Array.from(new Set(spec.subjectIds)),
     };
     if (spec.exactQuantity !== undefined && Number.isFinite(spec.exactQuantity)) line.exactQuantity = roundTo(spec.exactQuantity, 4);
+    if (spec.informational) line.informational = true;
     const priced = spec.unitPrice !== undefined && Number.isFinite(spec.unitPrice) && spec.unitPrice >= 0;
     if (priced) line.unitPrice = spec.unitPrice;
     const notes: string[] = [];
     if (spec.optional) {
+      line.optional = true;
       const cost = priced ? ` (about ${this.currency} ${money(spec.quantity * spec.unitPrice!).toFixed(2)} if needed)` : '';
       notes.push(`Recommended — not included in the totals${cost}.`);
     } else if (priced) {
@@ -671,15 +682,31 @@ export function estimateProject(project: Project): ProjectEstimate {
   const carpetStairs = prep.stairs.filter((s): s is StairCtx & { plan: StairPlan; product: Product } => s.plan !== undefined && s.product?.kind === 'carpet');
 
   // ---- 4. underlay -------------------------------------------------------------------------------------
-  const underlayAreas: UnderlayArea[] = carpetRooms.map((r) => {
+  const underlayGroups = new Map<string, { id: string; options: UnderlayOptions; areas: UnderlayArea[]; plan?: UnderlayPlan }>();
+  const addUnderlay = (product: Product, area: UnderlayArea) => {
+    const options = underlayFor(product, opts.underlay);
+    const key = JSON.stringify([options.fit, options.rollWidth, options.rollLength, options.thickness, options.tog, options.pricePerRoll, options.pricePerM2]);
+    const group = underlayGroups.get(key) ?? { id: underlayGroups.size === 0 ? 'carpet' : `carpet:${product.id}`, options, areas: [] };
+    group.areas.push(area);
+    underlayGroups.set(key, group);
+  };
+  carpetRooms.forEach((r) => {
     const area: UnderlayArea = { ownerId: r.room.id, ownerName: r.room.name, polygon: r.polygon };
     if (r.room.subfloor.underfloorHeating) area.underfloorHeating = true;
-    return area;
+    addUnderlay(r.product, area);
   });
   for (const s of carpetStairs) {
-    if (s.plan.underlayAreaM2 > 0) underlayAreas.push({ ownerId: s.staircase.id, ownerName: s.staircase.name, areaM2: s.plan.underlayAreaM2 });
+    if (s.plan.underlayAreaM2 > 0) addUnderlay(s.product, { ownerId: s.staircase.id, ownerName: s.staircase.name, areaM2: s.plan.underlayAreaM2 });
   }
-  const underlay = underlayAreas.length > 0 ? planUnderlay({ areas: underlayAreas, options: opts.underlay, accessories: opts.accessories }) : undefined;
+  let underlay: UnderlayPlan | undefined;
+  for (const group of underlayGroups.values()) {
+    group.plan = planUnderlay({ areas: group.areas, options: group.options, accessories: opts.accessories });
+    const p = group.plan;
+    underlay = underlay ? { totalAreaM2: underlay.totalAreaM2 + p.totalAreaM2, stripLengthMm: underlay.stripLengthMm + p.stripLengthMm,
+      rolls: underlay.rolls + p.rolls, exactRolls: underlay.exactRolls + p.exactRolls,
+      tapeLength: underlay.tapeLength + p.tapeLength, tapeRolls: 0, perOwner: [...underlay.perOwner, ...p.perOwner], warnings: [...underlay.warnings, ...p.warnings] } : { ...p };
+  }
+  if (underlay) underlay.tapeRolls = wholeUnits(underlay.tapeLength, opts.accessories.underlayTapeRollLength);
   if (underlay) warnings.push(...underlay.warnings);
 
   // ---- 5. gripper --------------------------------------------------------------------------------------
@@ -705,7 +732,7 @@ export function estimateProject(project: Project): ProjectEstimate {
   // Hard floors first, so a shared opening takes the profile its harder side needs. Between two
   // rooms of the same class the side whose build-up changes most wins: it is the side that decides
   // whether the door leaf has to come off, and it owns the opening for the door-easing count too.
-  const buildUpOf = (r: RoomCtx & { product: Product }) => buildUpChange(r.product, r.room.subfloor, opts.underlay) ?? 0;
+  const buildUpOf = (r: RoomCtx & { product: Product }) => buildUpChange(r.product, r.room.subfloor, underlayFor(r.product, opts.underlay)) ?? 0;
   const doorBarRooms: DoorBarRoom[] = [...plannedRooms]
     .sort((a, b) => DOOR_BAR_PRECEDENCE[a.product.kind] - DOOR_BAR_PRECEDENCE[b.product.kind] || buildUpOf(b) - buildUpOf(a))
     .map((r) => {
@@ -773,7 +800,7 @@ export function estimateProject(project: Project): ProjectEstimate {
       underlayHasDpm: r.hardFloor.underlayHasDpm,
     };
     if (newGripperOwners.has(r.room.id)) input.newGripper = true;
-    const change = buildUpChange(r.product, r.room.subfloor, opts.underlay);
+    const change = buildUpChange(r.product, r.room.subfloor, underlayFor(r.product, opts.underlay));
     if (change !== undefined) input.thicknessChange = change;
     if (!isBroadloomProduct(r.product) && isFloatingFloor(r.product.kind) && r.hardFloor.useBeading === false) input.refitSkirting = true;
     return input;
@@ -843,14 +870,19 @@ export function estimateProject(project: Project): ProjectEstimate {
       `${plan.rollsRequired} roll${plan.rollsRequired === 1 ? '' : 's'}, ${plan.cuts.length} cut${plan.cuts.length === 1 ? '' : 's'}`,
       `pile ${plan.pileDirection === 'along_length' ? 'along the length' : 'across the width'} of the rooms`,
     ];
+    const perRoll = product.priceBasis === 'per_roll';
+    const wholeRolls = perRoll && product.rollPricing !== 'cut_length';
+    const rollLength = product.pricedRollLength;
+    if (perRoll && !(rollLength && rollLength > 0)) warnings.push({ level: 'error', code: 'ROLL_PRICE_LENGTH_MISSING', message: `${product.name}: enter the roll length covered by its roll price before quoting.` });
+    if (perRoll) notes.push(wholeRolls ? `Charged per whole ${(rollLength ?? 0) / 1000} m roll, including the uncut remainder` : `Roll price prorated over ${(rollLength ?? 0) / 1000} m; only the ordered cut length is charged`);
     bom.add({
       id: `covering:${product.id}`,
       category: 'floor_covering',
       description: `${product.name} — ${fmtM(plan.rollWidth)} wide`,
-      quantity: roundTo(plan.orderLength / MM_PER_M, 2),
-      unit: 'lm',
-      exactQuantity: cutTotal / MM_PER_M,
-      unitPrice: product.pricePerM2 !== undefined ? money(product.pricePerM2 * (plan.rollWidth / MM_PER_M)) : undefined,
+      quantity: wholeRolls ? plan.rollsRequired : roundTo(plan.orderLength / MM_PER_M, 2),
+      unit: wholeRolls ? 'roll' : 'lm',
+      exactQuantity: wholeRolls ? (rollLength && rollLength > 0 ? cutTotal / rollLength : 0) : cutTotal / MM_PER_M,
+      unitPrice: perRoll ? (rollLength && rollLength > 0 && product.pricePerRoll !== undefined ? (wholeRolls ? product.pricePerRoll : product.pricePerRoll / (rollLength / MM_PER_M)) : undefined) : product.pricePerM2 !== undefined ? money(product.pricePerM2 * (plan.rollWidth / MM_PER_M)) : undefined,
       subjectIds: owners,
       notes: notes.join('; '),
     });
@@ -885,7 +917,7 @@ export function estimateProject(project: Project): ProjectEstimate {
     // exist already, and 27 boards of 1.285 m do not cover 13 rows of 2.6 m. See OVER_RUN_TOLERANCE.
     const packs = Math.ceil(exactPacks - 1e-9);
     const unit = product.kind === 'carpet_tiles' ? 'box' : 'pack';
-    const unitPrice = product.pricePerPack ?? (product.pricePerM2 !== undefined ? money(product.pricePerM2 * product.packCoverageM2) : undefined);
+    const unitPrice = product.priceBasis === 'per_m2' ? (product.pricePerM2 !== undefined ? money(product.pricePerM2 * product.packCoverageM2) : undefined) : product.pricePerPack ?? (product.pricePerM2 !== undefined ? money(product.pricePerM2 * product.packCoverageM2) : undefined);
     const boughtM2 = packs * product.packCoverageM2;
     const notes = [
       coverageNote(boughtM2, netM2),
@@ -919,12 +951,14 @@ export function estimateProject(project: Project): ProjectEstimate {
   }
 
   // underlay
-  if (underlay && underlay.rolls > 0) {
-    const u = opts.underlay;
+  for (const group of underlayGroups.values()) {
+    const underlay = group.plan;
+    if (!underlay || underlay.rolls <= 0) continue;
+    const u = group.options;
     const rollAreaM2 = mm2ToM2(u.rollWidth * u.rollLength);
     const unitPrice = u.pricePerRoll ?? (u.pricePerM2 !== undefined ? money(u.pricePerM2 * rollAreaM2) : undefined);
     bom.add({
-      id: 'underlay:carpet',
+      id: `underlay:${group.id}`,
       category: 'underlay',
       description: `Carpet underlay ${u.thickness} mm, ${fmtM(u.rollWidth)} x ${fmtM(u.rollLength)} rolls (${roundTo(rollAreaM2, 2)} m²)`,
       quantity: underlay.rolls,
@@ -1112,6 +1146,7 @@ export function estimateProject(project: Project): ProjectEstimate {
       subjectIds: item.ownerIds,
       notes: notes.join(' '),
       optional: !item.required,
+      informational: !priceKey,
     });
   }
   // polythene DPM sheet under floating floors (only where floor prep has not already listed one)
@@ -1390,6 +1425,13 @@ export function estimateProject(project: Project): ProjectEstimate {
     }
   }
 
+  const labourHours = estimateLabourHours(project, bom.lines.filter(l => l.category === 'labour'), new Set(Object.keys(productByOwner)));
+  if (labourHours.mode === 'hourly') {
+    for (let i = bom.lines.length - 1; i >= 0; i--) if (bom.lines[i]!.category === 'labour') bom.lines.splice(i, 1);
+    for (const line of labourHours.lines) bom.add({ id: `labour:hours:${line.id}`, category: 'labour', description: line.description,
+      quantity: line.hours, unit: 'hour', unitPrice: labourHours.hourlyRate, subjectIds: line.subjectIds, notes: line.calculation, ...(line.optional ? { optional: true } : {}) });
+  }
+
   // labour: a job is never charged less than the minimum, however small it is
   {
     const labourSoFar = money(bom.lines.filter((l) => l.category === 'labour').reduce((s, l) => s + (l.total ?? 0), 0));
@@ -1456,7 +1498,7 @@ export function estimateProject(project: Project): ProjectEstimate {
     };
   }
 
-  const details: EstimateDetails = { stairPlans, hardFloorPlans, doorBars, tapes, vinylSundries, floorPrep, productByOwner };
+  const details: EstimateDetails = { stairPlans, hardFloorPlans, doorBars, tapes, vinylSundries, floorPrep, productByOwner, labourHours };
   if (underlay) details.underlay = underlay;
   if (gripper) details.gripper = gripper;
 

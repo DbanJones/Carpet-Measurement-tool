@@ -7,6 +7,7 @@ import type { BomLine, Estimate, Project } from '@engine/types';
 import { formatMoney } from '@ui/components/inputs';
 import { BOM_CATEGORY_ORDER, categoryLabel, sortBomLines } from './csv';
 import { subjectName } from './Warnings';
+import { unpricedLines } from './status';
 
 /** Quantities: whole numbers as-is, otherwise up to 2 decimals ("8.5", "12", "0.25"). */
 export function formatQty(n: number | undefined, decimals = 2): string {
@@ -21,11 +22,14 @@ export interface BomTableProps {
   project: Project;
   /** Show the "Applies to" column (rooms / staircases). Default on. */
   showSubjects?: boolean;
+  /** Calculation errors can make the quote partial even when every emitted item is priced. */
+  incomplete?: boolean;
 }
 
-export function BomTable({ lines, totals, project, showSubjects = true }: BomTableProps) {
+export function BomTable({ lines, totals, project, showSubjects = true, incomplete: calculationIncomplete = false }: BomTableProps) {
   const currency = project.prices.currency;
   const priced = lines.some((l) => l.unitPrice !== undefined || l.total !== undefined);
+  const incomplete = calculationIncomplete || unpricedLines(lines).length > 0;
   const sorted = sortBomLines(lines);
   const categories = BOM_CATEGORY_ORDER.filter((c) => sorted.some((l) => l.category === c)).concat(
     Array.from(new Set(sorted.map((l) => l.category).filter((c) => !BOM_CATEGORY_ORDER.includes(c)))),
@@ -42,7 +46,7 @@ export function BomTable({ lines, totals, project, showSubjects = true }: BomTab
 
   return (
     <div className="table-scroll">
-      <table className="data bom-table" data-testid="bom-table">
+      <table className="data bom-table" data-testid="bom-table" aria-label="Bill of materials and costs">
         <thead>
           <tr>
             <th scope="col">Item</th>
@@ -85,14 +89,14 @@ export function BomTable({ lines, totals, project, showSubjects = true }: BomTab
                       {formatQty(l.quantity)}
                       {l.exactQuantity !== undefined && Math.abs(l.exactQuantity - l.quantity) > 1e-9 ? (
                         <div className="muted small bom-exact" title="Exact quantity before rounding up to whole units">
-                          ({formatQty(l.exactQuantity, 2)})
+                          Exact: {formatQty(l.exactQuantity, 2)}
                         </div>
                       ) : null}
                     </td>
                     <td>{l.unit}</td>
                     {priced ? (
                       <>
-                        <td className="num">{l.unitPrice === undefined ? '—' : money(l.unitPrice)}</td>
+                        <td className="num">{l.unitPrice === undefined ? (l.informational ? <span className="muted small">See notes</span> : l.optional ? '—' : <span className="unpriced">Not priced</span>) : money(l.unitPrice)}</td>
                         <td className="num">{l.total === undefined ? '—' : money(l.total)}</td>
                       </>
                     ) : null}
@@ -103,7 +107,7 @@ export function BomTable({ lines, totals, project, showSubjects = true }: BomTab
                 ))}
                 {hasSubtotal ? (
                   <tr className="bom-subtotal">
-                    <td colSpan={cols - 2} className="muted">
+                    <td colSpan={cols - 1 - (showSubjects ? 1 : 0)} className="muted">
                       {categoryLabel(cat)} subtotal
                     </td>
                     <td className="num">{money(subtotal)}</td>
@@ -122,7 +126,7 @@ export function BomTable({ lines, totals, project, showSubjects = true }: BomTab
               <TotalRow label={applyVat ? 'Subtotal (ex VAT)' : 'Subtotal'} value={money(totals.subtotal)} cols={cols} trailing={showSubjects} />
             ) : null}
             {applyVat && totals.vat !== undefined ? <TotalRow label={`VAT at ${vatPct}%`} value={money(totals.vat)} cols={cols} trailing={showSubjects} /> : null}
-            <TotalRow label={applyVat ? 'Total inc VAT' : 'Total (ex VAT)'} value={money(totals.total ?? totals.subtotal)} cols={cols} trailing={showSubjects} grand />
+            <TotalRow label={incomplete ? `Partial total${applyVat ? ' inc VAT' : ' (ex VAT)'}` : applyVat ? 'Total inc VAT' : 'Total (ex VAT)'} value={money(totals.total ?? totals.subtotal)} cols={cols} trailing={showSubjects} grand />
           </tfoot>
         ) : null}
       </table>

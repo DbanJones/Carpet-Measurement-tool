@@ -71,6 +71,69 @@ const BASE_PADS = 12;
 /** Underlay down the whole flight (`underlayRisers`): 12 x 423 x 860 + 200 x 860. */
 const BASE_UNDERLAY_FULL_FLIGHT = 4.53736;
 
+describe('surveyed custom stair footprints', () => {
+  const outlined = (): Step => ({ id: 'custom', kind: 'winder', width: 800, going: 400, rise: 180, goingNarrow: 400,
+    plan: { x: 0, y: 0, heading: 90, turn: -30 },
+    outline: { points: [{ x: -.5, y: 0 }, { x: .5, y: 0 }, { x: .5, y: 1 }, { x: -.5, y: .5 }], entry: [0, 1], exit: [3, 2] } });
+
+  it.each([400, 200])('uses the actual footprint after resizing custom cut depth to %i mm, retaining full cut bounds', going => {
+    const step = { ...outlined(), going }, source = stair({ steps: [step, ...steps(2)] });
+    const result = plan(source), rectangle = plan({ ...source, steps: [{ ...step, outline: undefined }, ...source.steps.slice(1)] });
+    const unused = 800 * going * .25;
+    expect(result.netAreaMm2).toBeCloseTo(rectangle.netAreaMm2 - unused);
+    expect(result.underlayAreaM2).toBe(rectangle.underlayAreaM2);
+    expect(result.pieces).toEqual(rectangle.pieces);
+    const hard = plan(source, laminate), hardRectangle = plan({ ...source, steps: [{ ...step, outline: undefined }, ...source.steps.slice(1)] }, laminate);
+    expect(hard.hardFloorAreaM2).toBeCloseTo(hardRectangle.hardFloorAreaM2! - unused / 1e6, 8);
+    const piece = result.perStep[0]!;
+    expect(piece.pieceLength!).toBeGreaterThanOrEqual(step.rise + going);
+    expect(piece.pieceWidth!).toBeGreaterThanOrEqual(step.width);
+  });
+
+  it('ignores a stale narrow-depth measurement in quantities, cut sizes and custom-shape notes', () => {
+    const source = stair({ steps: [{ ...outlined(), going: 200 }, ...steps(2)] });
+    const reference = plan(source);
+    for (const goingNarrow of [0, 10, 99999]) {
+      const altered = { ...source, steps: source.steps.map((step, index) => index === 0 ? { ...step, goingNarrow } : step) };
+      expect(plan(altered)).toEqual(reference);
+      expect(plan(altered, laminate)).toEqual(plan(source, laminate));
+    }
+    expect(reference.perStep[0]!.notes).toContain('custom tread: 120000 mm² footprint');
+    expect(reference.perStep[0]!.notes).not.toContain('narrow end');
+  });
+
+  it('uses the landing outline area while retaining its rectangular supply cut', () => {
+    const landing: Landing = { id: 'custom-landing', kind: 'quarter', width: 1000, length: 1200, afterStepIndex: 2,
+      outline: [{ x: -.5, y: 0 }, { x: .5, y: 0 }, { x: .5, y: 1 }, { x: 0, y: 1 }, { x: 0, y: .5 }, { x: -.5, y: .5 }], outlineExit: [2, 1] };
+    const source = stair({ landings: [landing] }), result = plan(source);
+    const rectangle = plan({ ...source, landings: [{ ...landing, outline: undefined }] });
+    expect(result.netAreaMm2).toBeCloseTo(rectangle.netAreaMm2 - 300000);
+    expect(result.underlayAreaM2).toBe(rectangle.underlayAreaM2);
+    expect(result.pieces).toEqual(rectangle.pieces);
+  });
+
+  it('keeps runner allowance conservative and never counts the top surface twice', () => {
+    const step = outlined(), source = stair({ runner: { width: 600, stairRods: false }, steps: [step, ...steps(2)] });
+    const rectangle = { ...source, steps: [{ ...step, outline: undefined }, ...source.steps.slice(1)] };
+    expect(plan(source).netAreaMm2).toBe(plan(rectangle).netAreaMm2);
+    expect(plan(source).underlayAreaM2).toBe(plan(rectangle).underlayAreaM2);
+    const top = stair({ steps: [...steps(2), step] });
+    const plainTop = { ...top, steps: [...top.steps.slice(0, -1), { ...step, outline: undefined }] };
+    expect(plan(top).netAreaMm2).toBe(plan(plainTop).netAreaMm2);
+    expect(plan(top).underlayAreaM2).toBe(plan(plainTop).underlayAreaM2);
+  });
+
+  it('falls back to full measured bounds and reports malformed outlines', () => {
+    const step = outlined(); step.outline!.points[2]!.x = 3;
+    const source = stair({ steps: [step, ...steps(2)] });
+    const result = plan(source), rectangle = plan({ ...source, steps: [{ ...step, outline: undefined }, ...source.steps.slice(1)] });
+    expect(result.netAreaMm2).toBe(rectangle.netAreaMm2);
+    expect(result.underlayAreaM2).toBe(rectangle.underlayAreaM2);
+    expect(result.pieces).toEqual(rectangle.pieces);
+    expect(codes(result)).toContain('INVALID_STAIR_OUTLINE');
+  });
+});
+
 describe('helpers', () => {
   it('stepWrapLength: rise + going + nosing, or rise + nosing for the top step', () => {
     expect(stepWrapLength({ rise: 200, going: 223 }, 20)).toBe(443);

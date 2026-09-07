@@ -1,0 +1,91 @@
+.room-workflow {
+  display: grid;
+  gap: .35rem;
+  margin: 0 0 1.25rem;
+  padding: .85rem 1rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: .88rem;
+  line-height: 1.5;
+}
+
+.room-workflow strong { font-size: .95rem; }
+.measurement-hint { margin: 0 0 .85rem; line-height: 1.6; }
+.room-editor .section-description { margin-top: -.15rem; line-height: 1.5; }
+.room-editor .section-header h3 { margin-bottom: 0; }
+.room-editor-eyebrow { color: var(--muted); font-size: .65rem; font-weight: 700; letter-spacing: .13em; }
+.room-editor .room-title h2 { margin: .2rem 0 0; font-size: 1.7rem; }
+.room-editor .room-title { align-items: center; margin-bottom: .65rem; }
+.room-editor .room-workflow { display: block; padding: 0; border: 0; background: transparent; color: var(--muted); max-width: 760px; font-size: .9rem; }
+.room-metric-cards .figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; border: 0; background: none; padding: 0; margin: 0 0 20px; }
+.room-metric-cards .figures > span:not(.muted) { display: flex; flex-direction: column; gap: 8px; border: 1px solid #dce5df; background: #f7faf8; border-radius: 10px; padding: 14px 18px; font-size: 12px; color: var(--muted); }
+.room-metric-cards .figures b { font-size: clamp(15px, 1.5vw, 23px); font-weight: 650; color: #244f40; }
+.room-metric-cards .figures > .muted { display: none; }
+.room-design-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(270px, 1fr); gap: 20px; align-items: start; }
+.room-plan-card, .room-dimension-card { min-width: 0; border: 1px solid #d9e3dd; border-radius: 12px; overflow: hidden; }
+.room-plan-card { background: #fbfdfb; }
+.room-plan-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; border-bottom: 1px solid #e3eae5; }
+.room-plan-card > header strong, .room-plan-card > header span { display: block; }
+.room-plan-card > header strong { font-size: 14px; }
+.room-plan-card > header span { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.room-plan-card > header button { font-size: 11px; flex-shrink: 0; }
+.room-plan-card .room-preview-figure { margin: 0; }
+.room-plan-card .room-editable-plan { border: 0; border-radius: 0; width: 100%; height: 360px; max-height: none; touch-action: none; background: radial-gradient(circle, #e3ebe5 1px, transparent 1px) 0 0 / 18px 18px; }
+.room-plan-card .room-plan-key { padding: 0 16px 10px; }
+.room-wall-handle, .room-corner-handle { cursor: grab; outline: none; }
+.room-wall-handle:active, .room-corner-handle:active { cursor: grabbing; }
+.room-wall-hit { stroke: transparent; stroke-width: 18px; }
+.room-wall-highlight { pointer-events: none; stroke: #21765a; stroke-width: 3px; opacity: 0; }
+.room-wall-handle:hover .room-wall-highlight, .room-wall-handle:focus-visible .room-wall-highlight, .room-wall-handle.selected .room-wall-highlight { opacity: 1; }
+.room-corner-hit { fill: transparent; }
+.room-corner-dot { fill: #fff; stroke: #32765c; stroke-width: 2.2px; }
+.room-corner-handle:hover .room-corner-dot, .room-corner-handle:focus-visible .room-corner-dot, .room-corner-handle.selected .room-corner-dot { fill: #e6bd71; stroke: #8b6323; stroke-width: 3px; }
+.room-plan-inspector { padding: 14px 18px; border-top: 1px solid #e1eae4; background: #f2f7f3; font-size: 12px; min-height: 78px; }
+.room-plan-inspector p { margin: 0; line-height: 1.6; }
+.room-plan-inspector .room-edit-status { color: #3c6952; font-size: 11px; margin-top: 7px; }
+.room-inspector-heading, .room-wall-fields, .room-corner-actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.room-inspector-heading { margin-bottom: 10px; }
+.room-inspector-heading button, .room-plan-inspector button { font-size: 11px; }
+.room-wall-fields .field { margin-bottom: 0; max-width: 180px; }
+.room-wall-fields .length-input { display: flex; min-width: 0; }
+.room-wall-fields input { min-width: 0; width: 100%; }
+.room-plan-footnote { font-size: 10px; line-height: 1.6; color: var(--muted); padding: 0 18px 14px; margin: 10px 0 0; }
+.room-angle-control { border-top: 1px solid #dce6de; margin-top: 12px; padding-top: 12px; }
+.room-angle-heading { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.room-angle-heading strong span { color: #92611b; margin-left: 5px; }
+.room-angle-heading > span { color: var(--muted); font-size: 11px; }
+.room-angle-inputs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-bottom: 9px; }
+.room-angle-inputs > button { min-height: 35px; }
+.room-angle-inputs label { min-width: 90px; flex: 1; max-width: 140px; }
+.room-angle-inputs label > span:first-child { display: block; font-size: 10px; margin-bottom: 4px; }
+.room-angle-inputs input { min-width: 0; width: 100%; }
+.room-angle-control > p { font-size: 10px; color: var(--muted); }
+.room-angle-marker path { stroke: #9b722d; stroke-width: 1.5px; fill: none; }
+.room-angle-marker text { fill: #865e20; paint-order: stroke; stroke: #fbfdfb; stroke-width: 12px; font-weight: 650; }
+.room-dimension-card { padding: 20px; background: #fff; }
+.room-dimension-card h4 { margin: 0 0 6px; font-size: 16px; }
+.room-dimension-card > p { margin: 0 0 16px; }
+.room-dimension-card .shape-editor .field-hint { font-size: 11px; line-height: 1.55; }
+.room-dimension-card .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.room-dimension-card .length-input { display: flex; min-width: 0; }
+.room-dimension-card .length-input input { width: 100%; min-width: 0; }
+.layout.layout-rooms { grid-template-columns: 230px minmax(0, 1fr); }
+.layout-rooms > .results-column { grid-column: 2; }
+@media (max-width: 1150px) { .room-design-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 800px) { .layout.layout-rooms { grid-template-columns: minmax(0, 1fr); } .layout-rooms > .results-column { grid-column: 1; } }
+@media (max-width: 520px) {
+  .room-metric-cards .figures { gap: 6px; }
+  .room-metric-cards .figures > span:not(.muted) { padding: 10px 8px; font-size: 10px; }
+  .room-metric-cards .figures b { font-size: 13px; }
+  .room-metric-cards .figures > span:last-of-type b { font-size: 11px; }
+  .room-plan-card > header { flex-wrap: wrap; padding: 12px; }
+  .room-plan-card .room-editable-plan { height: 280px; }
+  .room-plan-inspector, .room-dimension-card { padding: 14px; }
+  .room-wall-fields, .room-corner-actions { flex-wrap: wrap; }
+  .room-editor .room-title { align-items: flex-start; }
+  .room-editor .room-title .section-actions { gap: 5px; }
+  .room-editor .room-title button { font-size: 11px; }
+}

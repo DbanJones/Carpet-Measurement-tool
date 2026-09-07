@@ -1,0 +1,20 @@
+.floorplan-view { min-width: 0; }
+.floorplan-view .zoom-controls { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; margin: 0 0 .5rem; }
+.floorplan-view .zoom-controls button { min-width: 44px; min-height: 44px; padding: .45rem .65rem; }
+.floorplan-view .floorplan-canvas { height: clamp(340px, 65vh, 850px); max-height: none; overscroll-behavior: contain; touch-action: none; }
+.floorplan-view .fp-canvas-help { margin-left: auto; }
+.floorplan-view .floorplan-overlay { touch-action: none; user-select: none; }
+.fp-precision-toggle[aria-pressed="true"] { background:#eaf6f3; border-color:#77b7aa; color:#075d57; }
+.fp-precision-lens { position:absolute; z-index:8; top:70px; right:14px; width:194px; border:2px solid #17867d; border-radius:13px; overflow:hidden; background:white; box-shadow:0 6px 24px #123c3c30; pointer-events:none; }
+.fp-precision-lens.is-left { right:auto; left:14px; }
+.fp-precision-caption { display:flex; justify-content:space-between; gap:8px; padding:8px 10px; background:#eef8f5; color:#075d57; font-size:11px; }
+.fp-precision-caption span { color:#55746f; }
+.fp-precision-lens svg { display:block; width:100%; aspect-ratio:1; background:#fff; }
+@media (max-width: 800px) {
+  .fp-precision-lens { width:146px; top:64px; right:8px; }
+  .fp-precision-lens.is-left { left:8px; }
+  .fp-precision-caption { padding:6px; font-size:9px; }
+  .floorplan-view .floorplan-canvas { height: clamp(300px, 52dvh, 600px); }
+  .floorplan-view .fp-canvas-help { flex-basis: 100%; margin-left: 0; font-size: .75rem; }
+  .floorplan-view .fp-mouse-help, .floorplan-view .fp-actual-size { display: none; }
+}

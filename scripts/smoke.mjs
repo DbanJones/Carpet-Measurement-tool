@@ -144,6 +144,7 @@ async function startPreview() {
   const child = spawn(process.execPath, [path.join(REPO_ROOT, 'node_modules', 'vite', 'bin', 'vite.js'), 'preview', '--port', port, '--host', '127.0.0.1'], {
     cwd: REPO_ROOT,
     stdio: 'ignore',
+    windowsHide: true,
   });
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
@@ -158,6 +159,11 @@ async function startPreview() {
 function browserExecutable() {
   const explicit = process.env.CHROMIUM_PATH;
   if (explicit) return explicit;
+  if (process.platform === 'win32') {
+    const installed = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'];
+    const browser = installed.find((candidate) => existsSync(candidate));
+    if (browser) return browser;
+  }
   // Preinstalled browsers in the container/CI image; otherwise let playwright find its own.
   return existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined;
 }
@@ -242,11 +248,12 @@ async function run(page) {
   check('page responded 200', response?.status() === 200, `status ${response?.status()}`);
   await page.waitForSelector('.app', { timeout: 15000 });
   check('document title', (await page.title()).length > 0, await page.title());
-  check('welcome screen shown', await page.getByRole('heading', { name: 'Start measuring' }).isVisible());
+  check('welcome screen shown', await page.getByRole('heading', { name: 'Start with your flooring' }).isVisible());
   check('empty estimate prompt', await page.getByTestId('results-empty').isVisible());
   await shot(page, 'welcome');
 
   heading('2. Load example house');
+  await page.getByRole('button', { name: 'Project actions', exact: true }).click();
   await page.getByRole('button', { name: 'Load example house' }).click();
   await page.waitForSelector('aside.sidebar-column li', { timeout: 10000 });
   const rooms = sidebarSection(page, 'Rooms').locator('ul.list li');
@@ -326,6 +333,7 @@ async function run(page) {
   heading('7. Full estimate after the edit');
   await page.locator('nav.tabs button', { hasText: /^Estimate$/ }).click();
   await page.waitForSelector('[data-testid="results-panel"].results-expanded', { timeout: 5000 });
+  await page.getByRole('navigation', { name: 'Estimate sections', exact: true }).getByRole('button', { name: 'Overview', exact: true }).click();
   const expandedArea = await textOf(page.locator('main [data-testid="kpi-net-area"]'));
   check('full estimate shows the edited area', expandedArea === afterArea, `${expandedArea} vs ${afterArea}`);
   await tabChecks(page, 'Estimate');
@@ -350,6 +358,8 @@ async function tabChecks(page, label) {
     return;
   }
   if (label === 'Estimate') {
+    const sections = page.getByRole('navigation', { name: 'Estimate sections', exact: true });
+    await sections.getByRole('button', { name: 'Cutting plans', exact: true }).click();
     const rollPlans = await page.getByTestId('roll-plan-section').count();
     const diagrams = await page.getByTestId('roll-cut-diagram').count();
     const bomRows = await page.getByTestId('bom-table').locator('tbody tr').count();
@@ -357,14 +367,18 @@ async function tabChecks(page, label) {
     const stairCards = await page.getByTestId('stair-result').count();
     checkAtLeast('cutting plans on the estimate', rollPlans, 1);
     checkAtLeast('roll cut diagrams drawn', diagrams, 1);
+    check('cutting diagrams are visible in Cutting plans', await page.getByTestId('roll-cut-diagram').first().isVisible());
     checkAtLeast('pieces drawn in the first diagram', await page.getByTestId('roll-cut-diagram').first().locator('.roll-piece').count(), 1);
     checkAtLeast('cut rows listed', await page.getByTestId('cut-row').count(), 1);
     checkAtLeast('bill of materials rows', bomRows, 10);
+    await sections.getByRole('button', { name: 'Order list & costs', exact: true }).click();
     check('bill of materials totals', await page.getByTestId('bom-grand-total').isVisible());
     checkAtLeast('room result cards', roomCards, 5);
     checkAtLeast('stair result cards', stairCards, 1);
     checkAtLeast('roll width comparison rows', await page.getByTestId('compare-row').count(), 2);
+    await sections.getByRole('button', { name: 'Overview', exact: true }).click();
     const total = await textOf(page.locator('main [data-testid="kpi-total"]'));
+    check('total KPI is visible in Overview', await page.locator('main [data-testid="kpi-total"]').isVisible());
     check('estimate total is money', /[£$€]\s?\d/.test(total), total);
   }
 }

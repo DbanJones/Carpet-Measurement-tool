@@ -110,22 +110,32 @@ export function remapDoorways(doorways: Doorway[], next: Polygon): Doorway[] {
   });
 }
 
-export function ShapeEditor({ room, unit }: { room: Room; unit: DisplayUnit }) {
+export function ShapeEditor({ room, unit, onShapeChange, showFigures = true }: { room: Room; unit: DisplayUnit; onShapeChange?: (shape: RoomShape, doorways?: Doorway[]) => void; showFigures?: boolean }) {
   const updateRoom = useProjectStore((s) => s.updateRoom);
+  const select = useProjectStore((s) => s.select);
+  const setTab = useProjectStore((s) => s.setTab);
+  const sourceAvailable = useProjectStore((s) => s.project.floorPlans.some((plan) => plan.id === room.source?.floorPlanId));
   const shape = room.shape;
-  const setShape = (next: RoomShape) => updateRoom(room.id, { shape: next });
+  const setShape = (next: RoomShape) => {
+    // Length fields also commit on blur. An unchanged measurement must keep its trace position.
+    if (JSON.stringify(next) === JSON.stringify(shape)) return;
+    if (onShapeChange) onShapeChange(next);
+    else updateRoom(room.id, { shape: next, source: undefined });
+  };
   const [polygonMode, setPolygonMode] = useState<'points' | 'walk'>('points');
 
   const onKind = (kind: ShapeKind) => {
     if (kind === shape.kind) return;
     const next = convertShape(shape, kind);
     // Changing the shape changes the walls; doorways must follow or they are silently orphaned.
-    updateRoom(room.id, (r) => ({ ...r, shape: next, doorways: remapDoorways(r.doorways, safePolygon(next)) }));
+    if (onShapeChange) onShapeChange(next, remapDoorways(room.doorways, safePolygon(next)));
+    else updateRoom(room.id, (r) => ({ ...r, shape: next, source: undefined, doorways: remapDoorways(r.doorways, safePolygon(next)) }));
     if (kind === 'polygon') setPolygonMode('walk');
   };
 
   return (
     <div className="shape-editor">
+      {room.source ? <div className="field-hint"><p>Traced from a floor plan. Edit its outline on the plan to keep it positioned. Changing the shape or measurements here removes that plan link.</p>{sourceAvailable ? <button type="button" className="link" onClick={() => { select({ kind: 'room', id: room.id }); setTab('floorplan'); }}>Edit outline on plan</button> : <p>The source plan is no longer in this project.</p>}</div> : null}
       <Field label="Shape type" hint={KIND_HINT}>
         <Select value={shape.kind} onChange={onKind} options={SHAPE_KIND_OPTIONS} ariaLabel="Shape type" />
       </Field>
@@ -139,7 +149,7 @@ export function ShapeEditor({ room, unit }: { room: Room; unit: DisplayUnit }) {
         <PolygonForm shape={shape} unit={unit} onChange={setShape} mode={polygonMode} setMode={setPolygonMode} />
       ) : null}
 
-      <ShapeFigures shape={shape} unit={unit} />
+      {showFigures ? <ShapeFigures shape={shape} unit={unit} /> : null}
     </div>
   );
 }

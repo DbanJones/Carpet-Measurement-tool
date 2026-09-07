@@ -1,0 +1,23 @@
+.product-editor .product-supply-summary {
+  color: var(--muted);
+  font-size: .88rem;
+  line-height: 1.5;
+  margin: .3rem 0 .9rem;
+}
+
+.product-editor .section-description {
+  margin: .35rem 0 .75rem;
+  line-height: 1.6;
+}
+
+.product-editor .width-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem 1rem;
+}
+
+.product-editor .product-coverage-warning {
+  padding: .65rem .8rem;
+  border-left: 3px solid currentColor;
+  line-height: 1.6;
+}

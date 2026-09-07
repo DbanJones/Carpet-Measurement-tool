@@ -16,6 +16,7 @@ import { fileURLToPath, URL as NodeURL } from 'node:url';
 
 const SW_SOURCE = readFileSync(fileURLToPath(new NodeURL('../../public/sw.js', import.meta.url)), 'utf8');
 const ORIGIN = 'https://example.test/app/';
+const CACHE_PREFIX = 'flooring-estimator-%2Fapp%2F-';
 
 /** Just enough of a Response for the worker: `ok`, `type`, `clone()` and a readable marker. */
 class FakeResponse {
@@ -23,19 +24,21 @@ class FakeResponse {
     readonly marker: string,
     readonly ok = true,
     readonly type = 'basic',
+    readonly varyOrigin = false,
   ) {}
   clone(): FakeResponse {
-    return new FakeResponse(this.marker, this.ok, this.type);
+    return new FakeResponse(this.marker, this.ok, this.type, this.varyOrigin);
   }
 }
 
 interface FetchEvent {
-  request: { url: string; method: string; mode: string };
+  request: { url: string; method: string; mode: string; origin?: string };
   respondWith: (p: Promise<unknown>) => void;
+  waitUntil: (p: Promise<unknown>) => void;
 }
 
 /** Load sw.js into a fake worker global and return the handles a test needs to drive it. */
-function loadWorker(options: { network: (url: string) => FakeResponse | null }) {
+function loadWorker(options: { network: (url: string) => FakeResponse | null; assets?: string[] }) {
   const listeners = new Map<string, (event: unknown) => void>();
   const caches = new Map<string, Map<string, FakeResponse>>();
   const networkCalls: string[] = [];
@@ -47,6 +50,11 @@ function loadWorker(options: { network: (url: string) => FakeResponse | null }) 
       const store = caches.get(name) ?? new Map<string, FakeResponse>();
       caches.set(name, store);
       return {
+        match: async (req: string | { url: string; origin?: string }, options?: { ignoreVary?: boolean }) => {
+          const response = store.get(keyOf(req));
+          if (response?.varyOrigin && typeof req !== 'string' && req.origin && !options?.ignoreVary) return undefined;
+          return response;
+        },
         add: async (url: string) => {
           const res = options.network(new URL(url, ORIGIN).href);
           if (!res) throw new Error('404');
@@ -84,7 +92,8 @@ function loadWorker(options: { network: (url: string) => FakeResponse | null }) 
   };
 
   // eslint-disable-next-line @typescript-eslint/no-implied-eval -- this is exactly how a browser loads it
-  new Function('self', 'caches', 'fetch', 'Response', 'URL', SW_SOURCE)(self, cachesApi, fetchStub, FakeResponse, URL);
+  const source = SW_SOURCE.replace('/* __PRECACHE_ASSETS__ */ []', JSON.stringify(options.assets ?? []));
+  new Function('self', 'caches', 'fetch', 'Response', 'URL', source)(self, cachesApi, fetchStub, FakeResponse, URL);
 
   const fire = async (type: string, event: Record<string, unknown>) => {
     const fn = listeners.get(type);
@@ -94,17 +103,21 @@ function loadWorker(options: { network: (url: string) => FakeResponse | null }) 
     await Promise.all(waited);
   };
 
-  const request = async (url: string, mode = 'no-cors'): Promise<FakeResponse> => {
+  const request = async (url: string, mode = 'no-cors', origin?: string): Promise<FakeResponse> => {
     let answered: Promise<FakeResponse> | undefined;
+    const waited: Promise<unknown>[] = [];
     const event: FetchEvent = {
-      request: { url: new URL(url, ORIGIN).href, method: 'GET', mode },
+      request: { url: new URL(url, ORIGIN).href, method: 'GET', mode, origin },
       respondWith: (p) => {
         answered = p as Promise<FakeResponse>;
       },
+      waitUntil: (p) => waited.push(p),
     };
     listeners.get('fetch')!(event);
     if (!answered) throw new Error('the worker did not answer the request');
-    return answered;
+    const response = await answered;
+    await Promise.all(waited);
+    return response;
   };
 
   return { fire, request, networkCalls, caches, install: () => fire('install', {}) };
@@ -162,11 +175,62 @@ describe('offline shell (public/sw.js)', () => {
 
   it('drops the previous cache on activate, so old assets do not pile up for ever', async () => {
     const sw = loadWorker({ network: deployment('v1') });
-    sw.caches.set('flooring-estimator-old', new Map([[`${ORIGIN}stale.js`, new FakeResponse('stale')]]));
+    sw.caches.set(`${CACHE_PREFIX}old`, new Map([[`${ORIGIN}stale.js`, new FakeResponse('stale')]]));
     await sw.install();
     await sw.fire('activate', {});
-    expect([...sw.caches.keys()]).not.toContain('flooring-estimator-old');
+    expect([...sw.caches.keys()]).not.toContain(`${CACHE_PREFIX}old`);
     expect([...sw.caches.keys()]).toHaveLength(1);
+  });
+
+  it('opens offline after one visit, including PDF assets that have never been requested by the page', async () => {
+    let offline = false;
+    const assets = ['./assets/app-v1.js', './assets/app-v1.css', './assets/pdf-reader.js', './assets/pdf.worker.mjs'];
+    const sw = loadWorker({
+      assets,
+      network: (url) => offline ? null : (assets.some((asset) => url === new URL(asset, ORIGIN).href) ? new FakeResponse(url) : deployment('v1')(url)),
+    });
+    await sw.install();
+    await sw.fire('activate', {});
+    offline = true;
+    expect((await sw.request('./', 'navigate')).marker).toBe('index:v1');
+    for (const asset of assets) expect((await sw.request(asset)).marker).toBe(new URL(asset, ORIGIN).href);
+  });
+
+  it('does not install a broken offline build when one required asset cannot be fetched', async () => {
+    const sw = loadWorker({ assets: ['./assets/missing.js'], network: deployment('v1') });
+    await expect(sw.install()).rejects.toThrow();
+  });
+
+  it('reuses precached hashed assets when crossorigin loading adds an Origin header', async () => {
+    let offline = false;
+    const asset = './assets/app-v1.js';
+    const sw = loadWorker({
+      assets: [asset],
+      network: (url) => offline ? null : url === new URL(asset, ORIGIN).href
+        ? new FakeResponse('asset:v1', true, 'basic', true)
+        : deployment('v1')(url),
+    });
+    await sw.install();
+    offline = true;
+    expect((await sw.request(asset, 'cors', 'https://example.test')).marker).toBe('asset:v1');
+  });
+
+  it('preserves unrelated apps and another installation of this app on the same origin', async () => {
+    const sw = loadWorker({ network: deployment('v1') });
+    sw.caches.set('other-app-v1', new Map());
+    sw.caches.set('flooring-estimator-%2Fanother%2F-old', new Map());
+    await sw.install();
+    await sw.fire('activate', {});
+    expect(sw.caches.has('other-app-v1')).toBe(true);
+    expect(sw.caches.has('flooring-estimator-%2Fanother%2F-old')).toBe(true);
+  });
+
+  it('falls back to its working shell when the host returns a server error', async () => {
+    let serverError = false;
+    const sw = loadWorker({ network: (url) => serverError ? new FakeResponse('server error', false) : deployment('v1')(url) });
+    await sw.install();
+    serverError = true;
+    expect((await sw.request('./', 'navigate')).marker).toBe('index:v1');
   });
 
   it('carries a build id placeholder for the build to stamp, so each deployment gets its own cache', () => {

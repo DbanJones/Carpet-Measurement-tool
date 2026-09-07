@@ -1,0 +1,12 @@
+.fp-auto-scale .eyebrow{color:#6d529b}
+.fp-auto-scale-reading{display:flex;flex-direction:column;gap:5px;padding:14px;border:1px solid #dacff0;border-radius:10px;background:#faf7ff;margin:15px 0 10px}
+.fp-auto-scale-reading>span{font-size:12px;font-weight:600;color:#5d467d}
+.fp-auto-scale-reading>strong{font-size:21px;line-height:1.35;letter-spacing:-.35px;color:#453065;overflow-wrap:anywhere}
+.fp-auto-scale-reading>small{font-size:11px;color:#776987}
+.fp-auto-scale-reference{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:8px 1px;color:#584275}
+.fp-auto-scale-evidence{margin:12px 0 20px;font-size:12px;color:#63717a}
+.fp-auto-scale-evidence>summary{cursor:pointer;color:#655278}
+.fp-auto-scale-evidence>p{font-size:12px!important;line-height:1.6}
+.fp-auto-scale-manual{display:block;margin:10px auto}
+.fp-auto-scale-search .fp-scale-search-status{padding:12px;border:1px solid #e5dbf3;border-radius:9px;background:#faf7ff;color:#614b7d;font-size:12px;line-height:1.6}
+.fp-scale-room-preview{fill:#bfa9e722;stroke:#8c6cb5;stroke-dasharray:5 4;pointer-events:none}

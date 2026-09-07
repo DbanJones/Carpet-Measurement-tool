@@ -16,7 +16,7 @@ export interface Px {
   y: number;
 }
 
-export const ZOOM_MIN = 0.25;
+export const ZOOM_MIN = 0.05;
 export const ZOOM_MAX = 4;
 export const ZOOM_STEP = 1.25;
 

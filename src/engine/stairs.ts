@@ -33,6 +33,8 @@
 import type { Mm, M2, Id, CutPiece, Warning, Staircase, Step, StepKind, Landing, Product, BroadloomPlanningOptions, UnderlayOptions, AccessoryOptions } from './types';
 import { isBroadloom } from './types';
 import { ceilToStep, mm2ToM2, roundTo } from './units';
+import { polygonAreaMm2 } from './geometry';
+import { validStairOutlinePoints, validStepOutline } from './stairOutlines';
 import {
   DEFAULT_NOSING_OVERHANG,
   STEP_LENGTH_ALLOWANCE,
@@ -219,6 +221,8 @@ interface StepGeo {
   pieceLength: Mm;
   /** Must be its own piece even in a waterfall (winders; bullnose / curtail when fully fitted). */
   individual: boolean;
+  /** Unused portion of a custom tread's cut rectangle. Zero for unshaped and top treads. */
+  outlineAreaDifference: number;
   notes: string[];
 }
 
@@ -356,6 +360,7 @@ export function planStaircase(input: StairPlanInput): StairPlan {
   // ---- per-step geometry -----------------------------------------------------------------------
   const invalid: string[] = [];
   const assumedProjection: string[] = [];
+  const invalidOutlines: string[] = [];
   const geos: StepGeo[] = steps.map((step, index) => {
     const isTop = index === n - 1;
     const rise = nonNegative(step.rise);
@@ -374,13 +379,19 @@ export function planStaircase(input: StairPlanInput): StairPlan {
     const pieceWidth = runnerWidth ?? roundTo(width + STEP_WIDTH_ALLOWANCE + openCount * OPEN_SIDE_WRAP + bullnose.extra, 0);
     const pieceLength = roundTo(wrapLength + STEP_LENGTH_ALLOWANCE + (method === 'cap_and_band' ? CAP_AND_BAND_EXTRA : 0), 0);
     const individual = step.kind === 'winder' || (fullyFitted && (step.kind === 'bullnose' || step.kind === 'curtail'));
+    const customOutline = step.outline && validStepOutline(step.outline) ? step.outline : undefined;
+    if (step.outline && !customOutline) invalidOutlines.push(`step ${index + 1}`);
+    const outlineArea = customOutline ? Math.min(going * width, polygonAreaMm2(customOutline.points) * going * width) : going * width;
+    const outlineAreaDifference = isTop ? 0 : going * width - outlineArea;
 
     notes.push(
       isTop
         ? `top step: wrap ${wrapLength} = rise ${rise} + nosing ${nosingOverhang} (the tread is the landing)`
         : `wrap ${wrapLength} = rise ${rise} + going ${going} + nosing ${nosingOverhang}`,
     );
-    if (step.kind === 'winder') {
+    if (customOutline) {
+      notes.push(`custom tread: ${roundTo(outlineArea, 0)} mm² footprint; cut from the ${going} x ${width} mm bounding rectangle`);
+    } else if (step.kind === 'winder') {
       const narrow = nonNegative(step.goingNarrow);
       notes.push(`winder: kite cut from the bounding rectangle, going ${going} mm at the wide end${narrow > 0 ? `, ${narrow} mm at the narrow end` : ''}`);
     }
@@ -390,7 +401,7 @@ export function planStaircase(input: StairPlanInput): StairPlan {
     if (fullyFitted && openCount > 0 && !isPack) {
       notes.push(`open ${staircase.openSides === 'both' ? 'strings' : `${staircase.openSides} string`}: +${OPEN_SIDE_WRAP} mm width per side, ${openCount} x ${wrapLength} mm edge bound`);
     }
-    return { step, index, kind: step.kind, isTop, onStairs, rise, going, width, wrapLength, cladLength, padLength, coverWidth, pieceWidth, pieceLength, individual, notes };
+    return { step, index, kind: step.kind, isTop, onStairs, rise, going, width, wrapLength, cladLength, padLength, coverWidth, pieceWidth, pieceLength, individual, outlineAreaDifference, notes };
   });
 
   if (invalid.length > 0) {
@@ -399,13 +410,16 @@ export function planStaircase(input: StairPlanInput): StairPlan {
   if (assumedProjection.length > 0) {
     warnings.push({ level: 'warning', code: 'BULLNOSE_PROJECTION_ASSUMED', message: `${name}: bullnose projection not measured for ${assumedProjection.join(', ')}; measure how far the curved end projects beyond the string.`, subjectId: sid });
   }
+  for (const landing of landings) if (landing.landing.outline && !validStairOutlinePoints(landing.landing.outline)) invalidOutlines.push(`${landingLabel(landing.landing.kind).toLowerCase()} ${landing.k + 1}`);
+  if (invalidOutlines.length) warnings.push({ level: 'warning', code: 'INVALID_STAIR_OUTLINE', message: `${name}: ${invalidOutlines.join(', ')} ${invalidOutlines.length === 1 ? 'has an invalid custom shape' : 'have invalid custom shapes'}; the measured bounding rectangles were used for quantities. Check the outlines.`, subjectId: sid });
 
   // ---- building regulations sanity check (info only — old houses are often outside) -------------
   const regsIssues: string[] = [];
   for (const g of geos) {
     const reasons: string[] = [];
     if (g.rise > 0 && (g.rise < STAIR_REGS.minRise || g.rise > STAIR_REGS.maxRise)) reasons.push(`rise ${g.rise} mm`);
-    if (g.kind !== 'winder' && g.going > 0) {
+    // A custom footprint's going is its cut bound, not a surveyed walking-line going.
+    if (g.kind !== 'winder' && !g.step.outline && g.going > 0) {
       if (g.going < STAIR_REGS.minGoing || g.going > STAIR_REGS.maxGoing) reasons.push(`going ${g.going} mm`);
       const pitchDeg = (Math.atan2(g.rise, g.going) * 180) / Math.PI;
       if (pitchDeg > STAIR_REGS.maxPitchDeg + 1e-9) reasons.push(`pitch ${pitchDeg.toFixed(1)}°`);
@@ -433,11 +447,16 @@ export function planStaircase(input: StairPlanInput): StairPlan {
   let stairStepCount = 0; // steps carpeted from the stairs (pads, rods)
   for (const g of geos) {
     // the top riser is still carpeted, padded and bound when the landing takes it — it just moves to the landing below
-    netAreaMm2 += g.wrapLength * g.coverWidth;
+    // Fully fitted custom treads use their surveyed footprint for net area. The cut and riser
+    // remain conservative rectangles. A runner has no surveyed strip path, so retains its
+    // full width × going allowance rather than taking a proportional share of a shaped tread.
+    const unusedTread = isRunner ? 0 : g.outlineAreaDifference;
+    netAreaMm2 += g.wrapLength * g.coverWidth - unusedTread;
+    // Underlay is bought/cut as rectangular pads, including the existing nosing overlap.
     padAreaMm2 += g.padLength * g.coverWidth;
     if (g.onStairs && g.padLength > 0) padCount += 1;
     openEdge += openCount * g.wrapLength;
-    hardAreaMm2 += g.cladLength * g.width;
+    hardAreaMm2 += g.cladLength * g.width - g.outlineAreaDifference;
     nosingLength += g.width;
     if (g.onStairs) {
       stairStepCount += 1;
@@ -452,12 +471,15 @@ export function planStaircase(input: StairPlanInput): StairPlan {
   }
   for (const l of landings) {
     const cw = runnerWidth ?? l.width;
-    netAreaMm2 += l.length * cw;
+    const outline = l.landing.outline;
+    const footprintArea = outline && validStairOutlinePoints(outline) ? Math.min(l.length * l.width, polygonAreaMm2(outline) * l.length * l.width) : l.length * l.width;
+    const coveredArea = isRunner ? l.length * cw : footprintArea;
+    netAreaMm2 += coveredArea;
     padAreaMm2 += l.length * cw;
     // fully fitted: perimeter minus the edge where the flight arrives (gripper on the other three sides);
     // runner: the strip is fixed across at each end, like a step
     gripperRaw += isRunner ? GRIPPER_PER_STEP * cw : 2 * l.length + cw;
-    hardAreaMm2 += l.length * l.width;
+    hardAreaMm2 += footprintArea;
   }
 
   // ---- pieces (broadloom only) ------------------------------------------------------------------
@@ -603,17 +625,19 @@ export function planStaircase(input: StairPlanInput): StairPlan {
   } else {
     nosings = n;
     hardFloorAreaM2 = mm2ToM2(hardAreaMm2);
-    hardFloorGrossAreaM2 = hardFloorAreaM2 * (1 + STAIR_HARD_FLOOR_WASTAGE);
+    const productWaste = 'packCoverageM2' in product ? product.hardFloor?.wastage : undefined;
+    const stairWaste = productWaste !== undefined && Number.isFinite(productWaste) && productWaste >= 0 ? productWaste : STAIR_HARD_FLOOR_WASTAGE;
+    hardFloorGrossAreaM2 = hardFloorAreaM2 * (1 + stairWaste);
     const coverage = 'packCoverageM2' in product ? nonNegative(product.packCoverageM2) : 0;
     if (coverage > 0) hardFloorPacks = ceilToStep(hardFloorGrossAreaM2 / coverage, 1);
     for (const g of geos) {
       const entry = perStep[g.index]!;
-      entry.notes = [...g.notes, `${g.isTop ? `riser ${g.rise} mm` : `tread ${g.going} + riser ${g.rise} mm`} clad (${g.cladLength * g.width} mm²); ${g.width} mm stair nosing`].join('; ');
+      entry.notes = [...g.notes, `${g.isTop ? `riser ${g.rise} mm` : `tread ${g.going} + riser ${g.rise} mm`} clad (${roundTo(g.cladLength * g.width - g.outlineAreaDifference, 0)} mm²); ${g.width} mm stair nosing`].join('; ');
     }
     warnings.push({
       level: 'info',
       code: 'HARD_FLOOR_STAIRS_SPECIALIST',
-      message: `${name}: ${product.kind.replace(/_/g, ' ')} on stairs is specialist work — each tread and riser is cut individually with a stair nosing on every step (${n} nosings, ${fmtM(nosingLength)}); ${(STAIR_HARD_FLOOR_WASTAGE * 100).toFixed(0)}% cutting waste allowed.`,
+      message: `${name}: ${product.kind.replace(/_/g, ' ')} on stairs is specialist work — each tread and riser is cut individually with a stair nosing on every step (${n} nosings, ${fmtM(nosingLength)}); ${(stairWaste * 100).toFixed(0)}% cutting waste allowed${productWaste !== undefined ? ' from product settings' : ''}.`,
       subjectId: sid,
     });
   }

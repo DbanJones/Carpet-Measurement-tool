@@ -8,10 +8,12 @@
 
 /** Longest side of an imported raster, in pixels. */
 export const MAX_PLAN_PX = 2400;
+import type { PlanReading, PlanTextLine } from '@engine/types';
 /** A portrait A4 PDF rendered 2400 px wide would be ~3400 px tall; cap the long side there. */
 export const MAX_PDF_LONG_SIDE = 3400;
 
 export interface PlanRaster {
+  reading?: PlanReading;
   imageDataUrl: string;
   widthPx: number;
   heightPx: number;
@@ -63,6 +65,18 @@ export interface PdfHandle {
   destroy: () => Promise<void>;
 }
 
+/** Raster-coordinate bounds of PDF text, including rotated labels and rotated pages. */
+export function pdfTextBounds(matrix: readonly number[], textWidth: number): { x: number; y: number; width: number; height: number } {
+  const [a = 0, b = 0, c = 0, d = 0, e = 0, f = 0] = matrix;
+  const baseline = Math.hypot(a, b) || 1;
+  const dx = a / baseline * textWidth;
+  const dy = b / baseline * textWidth;
+  const xs = [e, e + dx, e + c, e + dx + c];
+  const ys = [f, f + dy, f + d, f + dy + d];
+  const x = Math.min(...xs); const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
 type PdfJs = typeof import('pdfjs-dist');
 let pdfjsPromise: Promise<PdfJs> | null = null;
 
@@ -85,9 +99,11 @@ export async function openPdf(file: File): Promise<PdfHandle> {
   const pdfjsLib = await loadPdfJs();
   const data = await file.arrayBuffer();
   let doc: Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']>;
+  const loadingTask = pdfjsLib.getDocument({ data });
   try {
-    doc = await pdfjsLib.getDocument({ data }).promise;
+    doc = await loadingTask.promise;
   } catch (err) {
+    await loadingTask.destroy().catch(() => undefined);
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`"${file.name}" could not be opened as a PDF${msg ? ` (${msg})` : ''}.`);
   }
@@ -108,11 +124,21 @@ export async function openPdf(file: File): Promise<PdfHandle> {
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas drawing is not available in this browser.');
         await page.render({ canvas, canvasContext: ctx, viewport, background: '#ffffff' }).promise;
-        return { imageDataUrl: canvas.toDataURL('image/png'), widthPx: canvas.width, heightPx: canvas.height };
+        let reading: PlanReading | undefined;
+        try {
+          const content = await page.getTextContent();
+          const lines: PlanTextLine[] = content.items.flatMap(item => {
+            if (!('str' in item) || !item.str.trim()) return [];
+            const matrix = pdfjsLib.Util.transform(viewport.transform, item.transform);
+            return [{ text: item.str, ...pdfTextBounds(matrix, item.width * scale), confidence: 100 }];
+          }).slice(0, 2000);
+          if (lines.length) reading = { source: 'pdf', text: lines.map(line => line.text).join('\n'), lines };
+        } catch { /* Image import remains usable when a PDF text layer is unavailable. */ }
+        return { imageDataUrl: canvas.toDataURL('image/png'), widthPx: canvas.width, heightPx: canvas.height, reading };
       } finally {
         page.cleanup();
       }
     },
-    destroy: () => doc.destroy(),
+    destroy: () => loadingTask.destroy(),
   };
 }

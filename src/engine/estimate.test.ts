@@ -353,6 +353,7 @@ describe('bill of materials', () => {
     const recommended = est.bom.filter(isRecommended);
     expect(recommended.length).toBeGreaterThan(0);
     for (const line of recommended) {
+      expect(line.optional).toBe(true);
       expect(line.total).toBeUndefined();
       if (line.unitPrice === undefined) continue;
       // e.g. 2 bags of latex at £20 -> "(about GBP 40.00 if needed)"
@@ -363,6 +364,14 @@ describe('bill of materials', () => {
     expect(skim.subjectIds).toEqual([R.bathroom]);
     expect(skim.total).toBeUndefined();
     expect(skim.notes).toContain('about GBP 40.00 if needed'); // 2 bags x £20
+  });
+
+  it('identifies preparation activities whose cost is included in labour or needs no separate charge', () => {
+    const activities = est.bom.filter((line) => line.category === 'floor_preparation' && line.unitPrice === undefined);
+    expect(activities.length).toBeGreaterThan(0);
+    for (const line of activities) expect(line.informational).toBe(true);
+    const covering = est.bom.find((line) => line.category === 'floor_covering');
+    expect(covering?.informational).toBeUndefined();
   });
 
   it('points every line at real rooms and staircases', () => {

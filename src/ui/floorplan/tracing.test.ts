@@ -160,7 +160,8 @@ describe('hit testing helpers', () => {
     expect(pixelPolygonArea(square)).toBe(6000);
   });
   it('clampZoom keeps zoom in range', () => {
-    expect(clampZoom(0.1)).toBe(0.25);
+    expect(clampZoom(0.01)).toBe(0.05);
+    expect(clampZoom(0.1)).toBe(0.1); // large uploaded plans can fit a phone viewport
     expect(clampZoom(10)).toBe(4);
     expect(clampZoom(1.5)).toBe(1.5);
     expect(clampZoom(NaN)).toBe(1);

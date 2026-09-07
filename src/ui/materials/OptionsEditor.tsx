@@ -72,6 +72,9 @@ export function BroadloomOptionsEditor() {
     <Section title="Broadloom planning" collapsible>
       <p className="muted small">How carpet and sheet vinyl are cut from the roll. Rooms can override these under their planning overrides.</p>
       <div className="grid-2">
+        <Field label="Default minimum surplus" hint="Minimum extra over net floor area. Existing cutting waste counts towards it; 0% keeps the calculated layout without extra reserve. Products can override this.">
+          <PercentInput value={o.wastageAllowance ?? 0} ariaLabel="Default broadloom wastage allowance" onChange={(wastageAllowance) => set({ wastageAllowance })} />
+        </Field>
         <Field label="Pile direction" hint={PILE_DESCRIPTIONS[o.pileDirection]}>
           <Select value={o.pileDirection} options={PILE_OPTIONS} ariaLabel="Pile direction" onChange={(pileDirection) => set({ pileDirection })} />
         </Field>

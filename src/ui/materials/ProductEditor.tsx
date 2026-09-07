@@ -7,12 +7,14 @@
 import { useState } from 'react';
 import type { BroadloomProduct, CoveringKind, Mm, PackProduct, Product } from '@engine/types';
 import { isBroadloom } from '@engine/types';
-import { CARPET_ROLL_WIDTHS, CARPET_ROLL_WIDTHS_OTHER, VINYL_ROLL_WIDTHS } from '@engine/defaults';
+import { CARPET_ROLL_WIDTHS, CARPET_ROLL_WIDTHS_OTHER, VINYL_ROLL_WIDTHS, CUT_INCREMENT, DEFAULT_CARPET_THICKNESS, DEFAULT_VINYL_THICKNESS } from '@engine/defaults';
 import { roundTo } from '@engine/units';
 import { useProjectStore } from '@store/projectStore';
 import { Checkbox, Field, LengthInput, NumberInput, Section, Select, formatLength, formatMoney, FieldGroup } from '@ui/components/inputs';
 import { KIND_LABELS, KIND_OPTIONS, defaultProductForKind, type BroadloomDraft, type PackDraft } from './presets';
 import { MmInput, MoneyInput } from './fields';
+import { BroadloomPrice, ProductPattern, ProductUnderlay, ProductWaste } from './ProductCommercial';
+import './product-editor.css';
 
 type DisplayUnit = 'metric' | 'imperial';
 type BroadloomKind = BroadloomProduct['kind'];
@@ -71,7 +73,9 @@ export function convertProductKind(p: Product, kind: CoveringKind): Product {
     return { ...(p as PackProduct), kind: kind as PackProduct['kind'] };
   }
 
-  const perM2 = p.pricePerM2 ?? ('packCoverageM2' in p && p.pricePerPack !== undefined && p.packCoverageM2 > 0 ? p.pricePerPack / p.packCoverageM2 : undefined);
+  const perM2 = 'rollWidth' in p && p.priceBasis === 'per_roll'
+    ? p.pricePerRoll !== undefined && p.pricedRollLength && p.rollWidth > 0 ? p.pricePerRoll / (p.pricedRollLength * p.rollWidth / 1e6) : undefined
+    : p.pricePerM2 ?? ('packCoverageM2' in p && p.pricePerPack !== undefined && p.packCoverageM2 > 0 ? p.pricePerPack / p.packCoverageM2 : undefined);
   if (willBeBroadloom) {
     const draft: BroadloomDraft = defaultProductForKind(kind as BroadloomKind, p.name);
     const out: BroadloomProduct = { ...draft, id: p.id };
@@ -167,7 +171,7 @@ export function ProductEditor({ productId, embedded }: { productId: string; embe
           <Field label="Product name" hint="As it should read on the quote, e.g. range and colour.">
             <input type="text" aria-label="Product name" value={product.name} onChange={(e) => updateProduct(product.id, { name: e.target.value })} />
           </Field>
-          <Field label="Kind" hint="Carpet and sheet vinyl are cut from a roll; everything else is sold by the pack or box.">
+          <Field label="Floor covering" hint="Choose how this product is supplied.">
             <Select value={product.kind} options={KIND_OPTIONS} ariaLabel="Product kind" onChange={onKindChange} />
           </Field>
         </div>
@@ -210,12 +214,27 @@ function BroadloomFields({
     onChange({ alternativeRollWidths: next.sort((a, b) => a - b) });
   };
   const patterned = (product.patternRepeatLength ?? 0) > 0 || (product.patternRepeatWidth ?? 0) > 0;
+  const cutIncrement = product.cutIncrement ?? CUT_INCREMENT;
+  const cutOptions = CUT_INCREMENTS.some((option) => option.value === String(cutIncrement))
+    ? CUT_INCREMENTS
+    : [...CUT_INCREMENTS, { value: String(cutIncrement), label: `${cutIncrement} mm (supplier setting)` }];
+  const thickness = product.thickness ?? (product.kind === 'carpet' ? DEFAULT_CARPET_THICKNESS : DEFAULT_VINYL_THICKNESS);
+  const wholeRollPurchase = product.priceBasis === 'per_roll' && product.rollPricing !== 'cut_length';
+  const supplierSummary = [
+    wholeRollPurchase ? product.pricedRollLength ? `${formatLength(product.pricedRollLength, unit)} per purchased roll` : 'Purchased roll length needed above' : product.maxRollLength ? `Up to ${formatLength(product.maxRollLength, unit)} per roll` : 'No roll length limit set',
+    `${cutIncrement} mm cut increments`,
+    product.minCutLength ? `${formatLength(product.minCutLength, unit)} minimum cut` : 'No minimum cut',
+    `${thickness} mm thick${product.thickness === undefined ? ' (default)' : ''}`,
+  ].join(' · ');
+  const patternSummary = patterned
+    ? `${formatLength(product.patternRepeatLength ?? 0, unit)} along the roll · ${formatLength(product.patternRepeatWidth ?? 0, unit)} across. Matching allowances are included.`
+    : 'Plain: no pattern repeat allowance.';
 
   return (
     <>
-      <Section title="Roll">
+      <Section title="Roll & price">
         <div className="grid-2">
-          <Field label="Roll width" hint={product.kind === 'carpet' ? 'UK carpet comes 4 m or 5 m wide; 12 ft and 15 ft rolls are still around.' : 'Sheet vinyl comes 2, 3 or 4 m wide; pick the width that avoids a seam.'}>
+          <Field label="Roll width" hint="The width you plan to order. Check the supplier's available sizes.">
             <Select
               value={showCustom ? 'custom' : String(product.rollWidth)}
               options={widthOptions}
@@ -231,16 +250,17 @@ function BroadloomFields({
               }}
             />
           </Field>
+          <BroadloomPrice product={product} onChange={onChange} />
           {showCustom ? (
             <Field label="Custom roll width" hint="Exact width of the roll as supplied.">
               <LengthInput value={product.rollWidth} unit={unit} min={100} ariaLabel="Custom roll width" onChange={(rollWidth) => onChange({ rollWidth, alternativeRollWidths: alternatives.filter((x) => x !== rollWidth) })} />
             </Field>
-          ) : (
-            <Field label="Roll width in use" hint="Every cut is charged at the full roll width times its length.">
-              <span data-testid="roll-width-figure">{formatLength(product.rollWidth, unit)}</span>
-            </Field>
-          )}
+          ) : null}
         </div>
+        <p className="product-supply-summary">
+          <span data-testid="roll-width-figure">{formatLength(product.rollWidth, unit)}</span> wide
+          {product.priceBasis === 'per_roll' ? <span data-testid="price-per-lm"> · {product.pricePerRoll === undefined ? 'Roll price not set' : `${formatMoney(product.pricePerRoll, currency)} per ${product.pricedRollLength ? formatLength(product.pricedRollLength, unit) : 'unspecified length'} roll`}</span> : product.pricePerM2 !== undefined ? <> · <span data-testid="price-per-lm">{formatMoney((product.pricePerM2 * product.rollWidth) / 1000, currency)}</span> per linear metre</> : <span data-testid="price-per-lm"> · Price not set</span>}
+        </p>
         {/* A group of checkboxes, so FieldGroup: a <label> wrapping them would tick the first one
             whenever the caption was clicked, silently adding a roll width to the comparison. */}
         <FieldGroup label="Also available in" hint="Tick other widths this product is stocked in; the estimate reports which width wastes least.">
@@ -250,23 +270,28 @@ function BroadloomFields({
             ))}
           </span>
         </FieldGroup>
+      </Section>
+
+      {product.kind === 'carpet' ? <ProductUnderlay product={product} onChange={onChange} /> : null}
+      <ProductWaste product={product} onChange={onChange} />
+      <Section title="Supplier & fitting details" description={supplierSummary} collapsible defaultOpen={false}>
         <div className="grid-2">
-          <Field label="Maximum roll length" hint="A requirement longer than one roll is split across rolls (carpet about 30 m, vinyl 20 m).">
-            <LengthInput value={product.maxRollLength} unit={unit} min={1000} ariaLabel="Maximum roll length" onChange={(maxRollLength) => onChange({ maxRollLength })} />
+          <Field label="Maximum roll length" hint={wholeRollPurchase ? 'Whole rolls use the priced roll length above. Change that length in Roll & price.' : 'The longest roll your supplier can deliver. Longer orders need more than one roll.'}>
+            <LengthInput value={wholeRollPurchase ? product.pricedRollLength : product.maxRollLength} disabled={wholeRollPurchase} unit={unit} min={1000} ariaLabel="Maximum roll length" onChange={(maxRollLength) => onChange({ maxRollLength })} />
           </Field>
-          <Field label="Cut increment" hint="Suppliers sell cut lengths rounded up to this step; most UK retailers use 10 cm.">
-            <Select value={String(product.cutIncrement ?? 100)} options={CUT_INCREMENTS} ariaLabel="Cut increment" onChange={(v) => onChange({ cutIncrement: Number(v) })} />
+          <Field label="Cut increment" hint="Ordered lengths round up to this supplier increment.">
+            <Select value={String(cutIncrement)} options={cutOptions} ariaLabel="Cut increment" onChange={(v) => onChange({ cutIncrement: Number(v) })} />
           </Field>
-          <Field label="Minimum cut" hint="Shortest length the supplier will cut off the roll (leave blank if none).">
+          <Field label="Minimum cut" hint="The supplier's shortest order length; enter 0 if none.">
             <LengthInput value={product.minCutLength} unit={unit} ariaLabel="Minimum cut length" onChange={(minCutLength) => onChange({ minCutLength })} />
           </Field>
           <Field label="Thickness" hint="Total thickness with backing; sets wrap allowances and door-bar height.">
-            <MmInput value={product.thickness} ariaLabel="Thickness" onChange={(thickness) => onChange({ thickness })} />
+            <MmInput value={thickness} ariaLabel="Thickness" onChange={(thickness) => onChange({ thickness })} />
           </Field>
         </div>
       </Section>
 
-      <Section title="Pattern" collapsible defaultOpen={patterned}>
+      <Section title="Pattern matching" description={patternSummary} collapsible defaultOpen={patterned}>
         <div className="grid-2">
           <Field label="Pattern repeat along the roll" hint="Every cut is rounded up to whole repeats so seams match; 0 for plain.">
             <LengthInput value={product.patternRepeatLength ?? 0} unit={unit} ariaLabel="Pattern repeat length" onChange={(patternRepeatLength) => onChange({ patternRepeatLength })} />
@@ -277,16 +302,6 @@ function BroadloomFields({
         </div>
       </Section>
 
-      <Section title="Price">
-        <div className="grid-2">
-          <Field label="Price per m²" hint="Supply price per square metre of roll bought (full width x cut length), excluding VAT.">
-            <MoneyInput value={product.pricePerM2} per="per m²" ariaLabel="Price per square metre" onChange={(pricePerM2) => onChange({ pricePerM2 })} />
-          </Field>
-          <Field label="Price per linear metre" hint="What one metre off the roll costs at this width.">
-            <span data-testid="price-per-lm">{product.pricePerM2 !== undefined ? formatMoney((product.pricePerM2 * product.rollWidth) / 1000, currency) : '—'}</span>
-          </Field>
-        </div>
-      </Section>
     </>
   );
 }
@@ -314,11 +329,18 @@ function PackFields({
   const boardAreaM2 = product.boardLength && product.boardWidth ? (product.boardLength * product.boardWidth) / 1_000_000 : undefined;
   const geometryCoverage = boardAreaM2 !== undefined && product.boardsPerPack ? roundTo(boardAreaM2 * product.boardsPerPack, 3) : undefined;
   const coverageMismatch = geometryCoverage !== undefined && Math.abs(geometryCoverage - product.packCoverageM2) > 0.05;
-  const derivedPerM2 = product.pricePerPack !== undefined && product.packCoverageM2 > 0 ? product.pricePerPack / product.packCoverageM2 : product.pricePerM2;
+  const perM2Basis = product.priceBasis === 'per_m2';
+  const derivedPerM2 = perM2Basis ? product.pricePerM2 : product.pricePerPack !== undefined && product.packCoverageM2 > 0 ? product.pricePerPack / product.packCoverageM2 : product.pricePerM2;
+  const detailSummary = [
+    product.boardsPerPack ? `${product.boardsPerPack} ${piece}s per ${unitWord}` : undefined,
+    product.boardLength && product.boardWidth ? `${formatLength(product.boardLength, unit)} × ${formatLength(product.boardWidth, unit)}` : undefined,
+    product.thickness !== undefined ? `${product.thickness} mm thick` : undefined,
+  ].filter(Boolean).join(' · ') || `Optional ${piece} sizes and thickness.`;
 
   const setCoverage = (packCoverageM2: number) => {
     const patch: Partial<PackProduct> = { packCoverageM2 };
-    if (product.pricePerPack !== undefined && packCoverageM2 > 0) patch.pricePerM2 = roundTo(product.pricePerPack / packCoverageM2, 2);
+    if (perM2Basis && product.pricePerM2 !== undefined) patch.pricePerPack = roundTo(product.pricePerM2 * packCoverageM2, 2);
+    else if (product.pricePerPack !== undefined && packCoverageM2 > 0) patch.pricePerM2 = roundTo(product.pricePerPack / packCoverageM2, 2);
     onChange(patch);
   };
   const setPackPrice = (pricePerPack: number) => {
@@ -329,11 +351,27 @@ function PackFields({
 
   return (
     <>
-      <Section title={tiles ? 'Box' : 'Pack'}>
+      <Section title={tiles ? 'Box & price' : 'Pack & price'}>
         <div className="grid-2">
           <Field label={`Coverage per ${unitWord}`} hint={`Square metres in one ${unitWord} as printed on the label; the estimate rounds up to whole ${unitPlural}.`}>
             <NumberInput value={product.packCoverageM2} min={0.01} step={0.01} suffix="m²" ariaLabel="Pack coverage" onChange={setCoverage} />
           </Field>
+          <Field label="Price basis"><Select ariaLabel="Product price basis" value={perM2Basis ? 'per_m2' : 'per_pack'} options={[{ value: 'per_pack', label: `Per ${unitWord}` }, { value: 'per_m2', label: 'Per square metre' }]} onChange={priceBasis => onChange({ priceBasis })} /></Field>
+          {perM2Basis ? <Field label="Price per m²" hint={`Before VAT; whole ${unitPlural} are ordered and charged.`}><MoneyInput value={product.pricePerM2} ariaLabel="Price per square metre" onChange={pricePerM2 => onChange({ pricePerM2, pricePerPack: roundTo(pricePerM2 * product.packCoverageM2, 2) })} /></Field> : <Field label={`Price per ${unitWord}`} hint={`Supply price of one ${unitWord}, before VAT.`}>
+            <MoneyInput value={product.pricePerPack} per={`per ${unitWord}`} ariaLabel="Price per pack" onChange={setPackPrice} />
+          </Field>}
+        </div>
+        <p className="product-supply-summary" data-testid="price-per-m2">
+          {derivedPerM2 !== undefined ? `${formatMoney(derivedPerM2, currency)} per m²` : 'Price not set'}
+        </p>
+        {coverageMismatch ? <p className="field-hint invalid product-coverage-warning">
+          The {piece} sizes total {geometryCoverage!.toFixed(2)} m² per {unitWord}; the estimate uses the entered coverage of {product.packCoverageM2.toFixed(2)} m². Check the supplier's label or adjust the {piece} details below.
+        </p> : null}
+      </Section>
+
+      <ProductPattern product={product} onChange={onChange} />
+      <Section title={`${Piece} & fitting details`} description={detailSummary} collapsible defaultOpen={false}>
+        <div className="grid-2">
           <Field label={`${Piece}s per ${unitWord}`} hint={`Used for ${piece} counts and pattern maths; leave blank if unknown.`}>
             <NumberInput value={product.boardsPerPack} min={1} integer ariaLabel="Boards per pack" onChange={(boardsPerPack) => onChange({ boardsPerPack })} />
           </Field>
@@ -354,16 +392,6 @@ function PackFields({
         </div>
       </Section>
 
-      <Section title="Price">
-        <div className="grid-2">
-          <Field label={`Price per ${unitWord}`} hint={`Supply price of one ${unitWord}, excluding VAT; whole ${unitPlural} are bought.`}>
-            <MoneyInput value={product.pricePerPack} per={`per ${unitWord}`} ariaLabel="Price per pack" onChange={setPackPrice} />
-          </Field>
-          <Field label="Price per m²" hint={`Derived from the ${unitWord} price and coverage.`}>
-            <span data-testid="price-per-m2">{derivedPerM2 !== undefined ? `${formatMoney(derivedPerM2, currency)} per m²` : '—'}</span>
-          </Field>
-        </div>
-      </Section>
     </>
   );
 }

@@ -6,10 +6,10 @@ import type { BroadloomPlanningOptions, CoveringKind, HardFloorOptions, LayPatte
 import { isBroadloom } from '@engine/types';
 import { useProjectStore } from '@store/projectStore';
 import { Field, Section, Select, formatLength } from '@ui/components/inputs';
-import { ShapeEditor } from './ShapeEditor';
+import { RoomPlanEditor } from './RoomPlanEditor';
 import { DoorwaysEditor } from './DoorwaysEditor';
 import { SubfloorEditor } from './SubfloorEditor';
-import { RoomPreview } from './RoomPreview';
+import './editor.css';
 
 type DisplayUnit = 'metric' | 'imperial';
 
@@ -21,6 +21,17 @@ const KIND_LABELS: Record<CoveringKind, string> = {
   lvt_click: 'LVT (click)',
   lvt_glue: 'LVT (glue-down)',
   carpet_tiles: 'Carpet tiles',
+};
+
+const SUBFLOOR_LABELS: Record<Room['subfloor']['type'], string> = {
+  concrete: 'Concrete',
+  anhydrite: 'Anhydrite screed',
+  floorboards: 'Timber floorboards',
+  chipboard: 'Chipboard',
+  plywood: 'Plywood',
+  existing_tiles: 'Existing tiles',
+  existing_vinyl: 'Existing vinyl',
+  asphalt: 'Asphalt',
 };
 
 function productLabel(p: Product, unit: DisplayUnit): string {
@@ -53,11 +64,18 @@ export function RoomEditor({ roomId }: { roomId: string }) {
   const broadloom = product ? isBroadloom(product.kind) : false;
   const effectivePile = room.planning?.pileDirection ?? options.broadloom.pileDirection;
   const pileArrow = broadloom && effectivePile !== 'auto' ? effectivePile : undefined;
+  const hasOverrides = Object.keys(room.planning ?? {}).length > 0 || Object.keys(room.hardFloor ?? {}).length > 0;
+  const subfloorSummary = [
+    SUBFLOOR_LABELS[room.subfloor.type],
+    room.subfloor.condition === 'good' ? 'flat and sound' : room.subfloor.condition,
+    room.subfloor.existingCovering && room.subfloor.existingCovering !== 'none' ? `remove ${room.subfloor.existingCovering}` : undefined,
+    room.subfloor.underfloorHeating ? 'underfloor heating' : undefined,
+  ].filter(Boolean).join(' · ');
 
   return (
     <div className="panel room-editor" key={room.id}>
       <div className="room-title">
-        <h2>{room.name || 'Untitled room'}</h2>
+        <div><span className="room-editor-eyebrow">ROOM OVERVIEW</span><h2>{room.name || 'Untitled room'}</h2></div>
         <span className="section-actions">
           <button type="button" onClick={() => duplicateRoom(room.id)}>
             Duplicate
@@ -74,6 +92,8 @@ export function RoomEditor({ roomId }: { roomId: string }) {
         </span>
       </div>
 
+      <p className="room-workflow">Shape the room on the plan or enter exact dimensions. Your measurements, material quantities and estimate stay in sync.</p>
+
       <Section title="Basics">
         <div className="grid-2">
           <Field label="Room name">
@@ -83,33 +103,38 @@ export function RoomEditor({ roomId }: { roomId: string }) {
             <Select value={room.productId} options={productOptions} ariaLabel="Product" onChange={(productId) => updateRoom(room.id, { productId })} />
           </Field>
         </div>
-        <Field label="Notes" hint="Shown on the quote, e.g. access, furniture to move, doors to ease.">
-          <textarea aria-label="Room notes" rows={2} value={room.notes ?? ''} onChange={(e) => updateRoom(room.id, { notes: e.target.value })} />
-        </Field>
       </Section>
 
-      <Section title="Shape">
-        <div className="shape-layout">
-          <div>
-            <ShapeEditor key={room.id} room={room} unit={unit} />
-          </div>
-          <div className="shape-preview">
-            <RoomPreview room={room} unit={unit} showPileArrow={pileArrow} />
-            <p className="field-hint">Circled numbers are the edge numbers used in the doorway table; blue bars are doorways.</p>
-          </div>
-        </div>
+      <Section title="Shape & measurements">
+        <RoomPlanEditor key={room.id} room={room} unit={unit} pileArrow={pileArrow}/>
       </Section>
 
-      <Section title="Doorways">
+      <Section title={`Doorways (${room.doorways.length})`} collapsible defaultOpen={room.doorways.length > 0}>
         <DoorwaysEditor room={room} unit={unit} />
       </Section>
 
-      <Section title="Subfloor">
+      <Section
+        title="Subfloor"
+        collapsible
+        defaultOpen={false}
+        description={`${subfloorSummary}. Check these assumptions: they affect preparation and fitting costs.`}
+      >
         <SubfloorEditor room={room} />
       </Section>
 
-      <Section title="Planning overrides" collapsible defaultOpen={false}>
+      <Section
+        title="Planning overrides"
+        collapsible
+        defaultOpen={hasOverrides}
+        description={hasOverrides ? 'This room has its own planning settings.' : 'Using project defaults. Open only if this room needs a different layout or seam policy.'}
+      >
         <PlanningOverrides room={room} product={product} options={options} />
+      </Section>
+
+      <Section title="Notes" collapsible defaultOpen={Boolean(room.notes?.trim())}>
+        <Field label="Room notes" hint="Shown on the quote, e.g. access, furniture to move, doors to ease.">
+          <textarea aria-label="Room notes" rows={2} value={room.notes ?? ''} onChange={(e) => updateRoom(room.id, { notes: e.target.value })} />
+        </Field>
       </Section>
     </div>
   );
@@ -199,11 +224,11 @@ function PlanningOverrides({ room, product, options }: { room: Room; product: Pr
   }
 
   const patternOptions: { value: LayPattern | typeof DEFAULT; label: string }[] = [
-    { value: DEFAULT, label: `Project default (${PATTERN_LABELS[options.hardFloor.layPattern]})` },
+    { value: DEFAULT, label: `${'hardFloor' in product && product.hardFloor?.layPattern ? 'Product' : 'Project'} default (${PATTERN_LABELS[('hardFloor' in product ? product.hardFloor?.layPattern : undefined) ?? options.hardFloor.layPattern]})` },
     ...(Object.keys(PATTERN_LABELS) as LayPattern[]).map((p) => ({ value: p, label: PATTERN_LABELS[p] })),
   ];
   const beadingOptions: { value: 'beading' | 'refit' | typeof DEFAULT; label: string }[] = [
-    { value: DEFAULT, label: `Project default (${options.hardFloor.useBeading ? 'beading / scotia' : 'refit skirting'})` },
+    { value: DEFAULT, label: `Default (${(('hardFloor' in product ? product.hardFloor?.useBeading : undefined) ?? options.hardFloor.useBeading) ? 'beading / scotia' : 'refit skirting'})` },
     { value: 'beading', label: 'Beading / scotia over the expansion gap' },
     { value: 'refit', label: 'Remove and refit the skirting' },
   ];

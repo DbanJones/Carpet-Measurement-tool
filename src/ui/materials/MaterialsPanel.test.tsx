@@ -7,7 +7,7 @@ import { ProductEditor, convertProductKind } from './ProductEditor';
 import { PRODUCT_PRESETS, UNDERLAY_PRESETS, defaultProductForKind } from './presets';
 
 function resetStore() {
-  useProjectStore.setState({ project: makeEmptyProject('Test'), selection: { kind: 'none' }, tab: 'materials', revision: 0 });
+  useProjectStore.setState({ project: makeEmptyProject('Test'), selection: { kind: 'none' }, tab: 'materials', revision: 0, newSpaceProductId: null });
 }
 const state = () => useProjectStore.getState();
 const firstProduct = () => state().project.products[0]!;
@@ -24,15 +24,61 @@ afterEach(() => {
 });
 
 describe('MaterialsPanel', () => {
+  it.each([['Measure a room', 'rooms'], ['Measure stairs', 'staircases']] as const)('continues from a chosen product through %s', (action, collection) => {
+    const id = state().addProduct({ name: 'Bedroom wool', kind: 'carpet', rollWidth: 5000, pricePerM2: 32 });
+    state().select({ kind: 'product', id });
+    render(<MaterialsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    expect(state().project[collection]).toHaveLength(1);
+    expect(state().project[collection][0]?.productId).toBe(id);
+    expect(state().newSpaceProductId).toBe(id);
+    expect(state().tab).toBe('rooms');
+  });
+
+  it('carries the selected product into the floor-plan workflow without adding a measured space', () => {
+    const id = state().addProduct({ name: 'Plan carpet', kind: 'carpet', rollWidth: 5000 });
+    state().select({ kind: 'product', id });
+    render(<MaterialsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use a floor plan' }));
+    expect(state().newSpaceProductId).toBe(id);
+    expect(state().tab).toBe('floorplan');
+    expect(state().project.rooms).toHaveLength(0);
+  });
+  it('uses one named native button per product to open and close its editor', () => {
+    render(<MaterialsPanel />);
+    const list = screen.getByTestId('product-list');
+    // A single product opens immediately so initial setup needs no extra Edit click.
+    expect(screen.getByLabelText('Product name')).toBeTruthy();
+    fireEvent.click(within(list).getByRole('button', { name: 'Close Carpet (4 m roll)' }));
+    const productButton = within(list).getByRole('button', { name: 'Edit Carpet (4 m roll)' });
+    expect(productButton.tagName).toBe('BUTTON');
+    expect(productButton.getAttribute('aria-expanded')).toBe('false');
+    expect(list.querySelectorAll('li[aria-selected]')).toHaveLength(0);
+    productButton.focus();
+    expect(document.activeElement).toBe(productButton);
+    fireEvent.click(productButton);
+    expect(state().selection).toEqual({ kind: 'product', id: firstProduct().id });
+    const closeButton = within(list).getByRole('button', { name: 'Close Carpet (4 m roll)' });
+    expect(closeButton.getAttribute('aria-expanded')).toBe('true');
+    const editor = document.getElementById(closeButton.getAttribute('aria-controls')!);
+    expect(editor).toBeTruthy();
+    expect(within(editor!).getByLabelText('Product name')).toBeTruthy();
+    fireEvent.click(closeButton);
+    expect(screen.queryByLabelText('Product name')).toBeNull();
+    expect(state().selection).toEqual({ kind: 'none' });
+  });
+
   it('lists the products from the store with their supply and price', () => {
     render(<MaterialsPanel />);
     expect(screen.getByRole('heading', { name: 'Materials & options' })).toBeTruthy();
     const list = within(screen.getByTestId('product-list'));
     expect(list.getByText('Carpet (4 m roll)')).toBeTruthy();
     expect(list.getByText(/Carpet · 4\.00 m roll · £18\.00 per m²/)).toBeTruthy();
-    // sections
+    // Project-wide fitting choices are available one level below the initial product setup.
+    expect(screen.queryByRole('button', { name: /Broadloom planning/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Planning & fitting options/ }));
     expect(screen.getByRole('button', { name: /Broadloom planning/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Underlay/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Underlay$/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Prices/ })).toBeTruthy();
   });
 
@@ -50,6 +96,7 @@ describe('MaterialsPanel', () => {
     expect(state().selection).toEqual({ kind: 'product', id: added.id });
     expect((screen.getByLabelText('Product name') as HTMLInputElement).value).toBe('Laminate 8 mm click');
     expect((screen.getByLabelText('Pack coverage') as HTMLInputElement).value).toBe('2.22');
+    fireEvent.click(screen.getByRole('button', { name: /Board & fitting details/ }));
     expect(screen.getByTestId('coverage-check').textContent).toMatch(/9 x 0\.247 m² = 2\.22 m² ✓/);
     expect(screen.getByTestId('price-per-m2').textContent).toBe('£9.91 per m²');
   });
@@ -83,6 +130,7 @@ describe('MaterialsPanel', () => {
     p = firstProduct() as BroadloomProduct;
     expect(p.alternativeRollWidths).toEqual([4000]);
 
+    fireEvent.click(screen.getByRole('button', { name: /Supplier & fitting details/ }));
     fireEvent.change(screen.getByLabelText('Cut increment'), { target: { value: '500' } });
     expect((firstProduct() as BroadloomProduct).cutIncrement).toBe(500);
 
@@ -167,6 +215,7 @@ describe('MaterialsPanel', () => {
 
   it('writes broadloom planning and underlay options', () => {
     render(<MaterialsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: /Planning & fitting options/ }));
     fireEvent.change(screen.getByLabelText('Seam policy'), { target: { value: 'min_seams' } });
     expect(state().project.options.broadloom.seamPolicy).toBe('min_seams');
     expect(screen.getByText(/Every fill is one full-length strip/)).toBeTruthy();
@@ -187,6 +236,7 @@ describe('MaterialsPanel', () => {
 
   it('writes accessory, floor prep and hard floor options (percentages stored as fractions)', () => {
     render(<MaterialsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: /Planning & fitting options/ }));
     fireEvent.click(screen.getByRole('button', { name: /Accessories/ }));
     typeAndBlur(screen.getByLabelText('Gripper wastage'), '15');
     expect(state().project.options.accessories.gripperWastage).toBe(0.15);
@@ -237,6 +287,7 @@ describe('MaterialsPanel', () => {
     render(<MaterialsPanel />);
     expect(within(screen.getByTestId('product-list')).getByText(/13' 1" roll/)).toBeTruthy();
     expect(screen.getByTestId('roll-width-figure').textContent).toBe(`13' 1"`);
+    fireEvent.click(screen.getByRole('button', { name: /Supplier & fitting details/ }));
     typeAndBlur(screen.getByLabelText('Maximum roll length'), `100'`);
     expect((firstProduct() as BroadloomProduct).maxRollLength).toBe(30480);
   });
@@ -275,6 +326,7 @@ describe('captions that used to be traps', () => {
     // `button` is a labelable element: the old <label> forwarded its activation to the first preset,
     // replacing roll width, roll length, thickness, tog and price in one click, with no undo.
     render(<MaterialsPanel />);
+    fireEvent.click(screen.getByRole('button', { name: /Planning & fitting options/ }));
     const before = { ...state().project.options.underlay };
     const caption = screen.getByText('Presets');
     expect(caption.closest('label')).toBeNull();

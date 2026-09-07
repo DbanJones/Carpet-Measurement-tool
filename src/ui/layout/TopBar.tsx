@@ -1,19 +1,24 @@
-import { useRef, useState } from 'react';
-import { useProjectStore, type Tab } from '@store/projectStore';
+import { useEffect, useRef, useState } from 'react';
+import { makeEmptyProject, usePersistenceStore, useProjectStore, type Tab } from '@store/projectStore';
 import { serializeProject, parseProject } from '@engine/serialize';
 import { sampleProject } from '@engine/fixtures';
 import type { Project } from '@engine/types';
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'materials', label: 'Materials & options' },
   { id: 'rooms', label: 'Rooms & stairs' },
   { id: 'floorplan', label: 'Floor plan' },
-  { id: 'materials', label: 'Materials & options' },
   { id: 'results', label: 'Estimate' },
+  { id: 'settings', label: 'Settings' },
 ];
 
 /** True when the project holds work that would be lost by replacing it. */
 export function hasContent(p: Project): boolean {
-  return p.rooms.length > 0 || p.staircases.length > 0 || p.floorPlans.length > 0;
+  if (p.rooms.length > 0 || p.staircases.length > 0 || p.floorPlans.length > 0) return true;
+  const { id: _id, products, ...details } = p;
+  const { id: _emptyId, products: emptyProducts, ...emptyDetails } = makeEmptyProject();
+  return JSON.stringify(details) !== JSON.stringify(emptyDetails)
+    || JSON.stringify(products.map(({ id: _productId, ...product }) => product)) !== JSON.stringify(emptyProducts.map(({ id: _productId, ...product }) => product));
 }
 
 export function TopBar() {
@@ -25,6 +30,19 @@ export function TopBar() {
   const resetProject = useProjectStore((s) => s.resetProject);
   const fileRef = useRef<HTMLInputElement>(null);
   const [loadWarnings, setLoadWarnings] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [fileNotice, setFileNotice] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const persistence = usePersistenceStore();
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOutside = (event: PointerEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setMenuOpen(false); document.getElementById('project-actions-toggle')?.focus(); } };
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', escape); };
+  }, [menuOpen]);
 
   /** Every action that REPLACES the whole project asks first — there is no undo. */
   const confirmReplace = (what: string) => !hasContent(project) || window.confirm(`${what} The current project is discarded unless you have saved it.`);
@@ -36,13 +54,16 @@ export function TopBar() {
     a.href = url;
     a.download = `${project.name.replace(/[^\w.-]+/g, '_') || 'project'}.flooring.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setFileNotice('Backup download started. Keep this file to restore your project on any device.');
   };
   const load = async (file: File) => {
-    const text = await file.text();
+    setLoadError(null);
+    let text: string;
+    try { text = await file.text(); } catch { setLoadError('This file could not be read. Try opening it again.'); return; }
     const res = parseProject(text);
     if ('error' in res) {
-      alert(`Could not load project: ${res.error}`);
+      setLoadError(`Could not load project: ${res.error}`);
       return;
     }
     if (!confirmReplace(`Replace the current project with "${file.name}"?`)) return;
@@ -50,11 +71,15 @@ export function TopBar() {
     // screen: it loads looking complete and the fitter has no other way to know what changed.
     setLoadWarnings(res.warnings);
     setProject(res.project);
+    setTab('rooms');
+    setFileNotice(null);
   };
   const loadExample = () => {
     if (!confirmReplace('Replace the current project with the example house?')) return;
     setLoadWarnings([]);
     setProject(sampleProject());
+    setTab('rooms');
+    setMenuOpen(false);
   };
   /** Print always produces the full estimate, so switch to it first. */
   const print = () => {
@@ -69,10 +94,26 @@ export function TopBar() {
   return (
     <>
       <header className="topbar no-print">
-        <h1 className="topbar-title">
-          <span className="sr-only">Flooring estimator — project name</span>
+        <div className="brand"><svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true"><rect width="32" height="32" rx="9" fill="currentColor"/><path d="M9 23V9h14v6H15v8ZM19 19h4v4h-4" fill="none" stroke="white" strokeWidth="2" strokeLinejoin="round"/></svg><h1>Flooring<span>Estimator</span></h1></div>
+        <div className="project-identity">
           <input className="project-name" aria-label="Project name" value={project.name} onChange={(e) => updateProject({ name: e.target.value })} />
-        </h1>
+          <span className={`save-status ${persistence.status}`} role="status"><span aria-hidden="true" className="status-dot"/>{persistence.status === 'saved' ? 'Saved in this browser' : persistence.status === 'error' ? 'Browser save failed' : 'Local project · ready to start'}</span>
+        </div>
+        <div className="topbar-actions">
+          <label className="row small unit-select">Units<select value={project.displayUnit} onChange={(e) => updateProject({ displayUnit: e.target.value as 'metric' | 'imperial' })}><option value="metric">metres</option><option value="imperial">feet &amp; inches</option></select></label>
+          <button type="button" className="primary" onClick={download}>Save file</button>
+          <div className="project-actions" ref={menuRef}>
+            <button type="button" id="project-actions-toggle" aria-expanded={menuOpen} aria-controls="project-actions-panel" onClick={() => setMenuOpen(!menuOpen)}>Project actions <span aria-hidden="true">⌄</span></button>
+            {menuOpen ? <div className="project-menu" id="project-actions-panel">
+              <button type="button" onClick={() => { fileRef.current?.click(); setMenuOpen(false); }}>Load file</button>
+              <button type="button" onClick={loadExample}>Load example house</button>
+              <button type="button" onClick={() => { print(); setMenuOpen(false); }}>Print</button>
+              <button type="button" className="danger" onClick={() => {
+                if (confirmReplace('Start a new empty project?')) { resetProject(); setLoadWarnings([]); setLoadError(null); setFileNotice(null); setMenuOpen(false); }
+              }}>New</button>
+            </div> : null}
+          </div>
+        </div>
         {/* Plain navigation buttons, not an ARIA tablist: a tablist promises arrow-key movement and
             labelled panels, and announcing "tab 1 of 4" when Tab is the only way to move is worse
             than saying nothing. aria-current marks the page being shown. */}
@@ -83,20 +124,6 @@ export function TopBar() {
             </button>
           ))}
         </nav>
-        <span className="spacer" />
-        <label className="row small">
-          Units
-          <select value={project.displayUnit} onChange={(e) => updateProject({ displayUnit: e.target.value as 'metric' | 'imperial' })}>
-            <option value="metric">metres</option>
-            <option value="imperial">feet &amp; inches</option>
-          </select>
-        </label>
-        <button type="button" onClick={download}>
-          Save file
-        </button>
-        <button type="button" onClick={() => fileRef.current?.click()}>
-          Load file
-        </button>
         <input
           ref={fileRef}
           type="file"
@@ -108,22 +135,11 @@ export function TopBar() {
             e.target.value = '';
           }}
         />
-        <button type="button" onClick={loadExample}>
-          Load example house
-        </button>
-        <button
-          type="button"
-          className="danger"
-          onClick={() => {
-            if (confirmReplace('Start a new empty project?')) resetProject();
-          }}
-        >
-          New
-        </button>
-        <button type="button" onClick={print}>
-          Print
-        </button>
       </header>
+      {persistence.status === 'error' ? <div className="save-alert no-print" role="alert"><strong>Your latest changes are not saved in this browser.</strong> {persistence.message} <button type="button" onClick={download}>Save a backup file</button><button type="button" onClick={() => useProjectStore.getState().retrySave()}>Retry browser save</button></div> : null}
+      {loadError ? <div className="save-alert no-print" role="alert">{loadError}<button type="button" onClick={() => setLoadError(null)}>Dismiss</button></div> : null}
+      {fileNotice ? <div className="file-notice no-print" role="status">{fileNotice}<button type="button" className="link" onClick={() => setFileNotice(null)}>Dismiss</button></div> : null}
+      {persistence.restoreWarnings.length > 0 ? <div className="save-alert no-print" role="alert"><strong>Check your restored project</strong><ul>{persistence.restoreWarnings.map((warning, i) => <li key={i}>{warning}</li>)}</ul><button type="button" onClick={persistence.dismissRestoreWarnings}>Dismiss restore notice</button></div> : null}
       {loadWarnings.length > 0 ? (
         <div className="load-warnings no-print" role="alert">
           <div className="warning">
